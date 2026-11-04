@@ -1,5 +1,6 @@
 package com.example.cameraapp
 
+import android.content.Context
 import android.content.res.Configuration
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
@@ -129,7 +130,7 @@ fun CameraScreen() {
     // Tell CameraX about each new display rotation so photos are saved upright; a display
     // listener also catches 180-degree flips, which don't trigger a configuration change.
     DisposableEffect(Unit) {
-        val displayManager = context.getSystemService(DisplayManager::class.java)
+        val displayManager = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         val listener = object : DisplayManager.DisplayListener {
             override fun onDisplayAdded(displayId: Int) = Unit
             override fun onDisplayRemoved(displayId: Int) = Unit
