@@ -1,5 +1,6 @@
 package com.example.cameraapp
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -32,8 +33,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -45,16 +49,6 @@ private val EditorBackground = Color.Black.copy(alpha = 0.88f)
 private val LabelColor = Color.White.copy(alpha = 0.85f)
 private val MutedColor = Color.White.copy(alpha = 0.5f)
 
-private enum class EditorSection(val title: String) {
-    COLOR("COLOR BALANCE"),
-    SATURATION("SATURATION"),
-    MONO("MONOCHROME"),
-    TONE("TONE CURVE"),
-    SPLIT("SPLIT TONING"),
-    HSL("COLOR BANDS (HSL)"),
-    TEXTURE("TEXTURE & LENS"),
-}
-
 /**
  * Slider panel for building a recipe. Every change goes straight to [onChange], so the live
  * preview behind the panel updates while dragging. Tap any value to reset that setting.
@@ -64,20 +58,29 @@ fun RecipeEditor(
     draft: FilmRecipe,
     isBuiltIn: Boolean,
     isSaved: Boolean,
+    isFavorite: Boolean,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    luts: List<String>,
+    lensOptions: List<Int>,
     onChange: (FilmRecipe) -> Unit,
     onSave: () -> Unit,
     onDelete: () -> Unit,
     onClose: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    onMove: (Int) -> Unit,
+    onShare: () -> Unit,
+    onImportLut: () -> Unit,
+    onDeleteLut: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var open by rememberSaveable { mutableStateOf(setOf(EditorSection.COLOR.name)) }
-    var tintTarget by rememberSaveable { mutableIntStateOf(0) }
+    var open by rememberSaveable { mutableStateOf(setOf(RecipeSections.first().title)) }
     var band by rememberSaveable { mutableIntStateOf(0) }
+    var curveChannel by rememberSaveable { mutableIntStateOf(0) }
 
     Column(modifier = modifier.background(EditorBackground).imePadding()) {
-        // Header: name and actions.
         Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             BasicTextField(
@@ -89,95 +92,52 @@ fun RecipeEditor(
                 modifier = Modifier.weight(1f)
             )
             EditorButton(if (isBuiltIn) "SAVE COPY" else "SAVE", highlighted = true, onClick = onSave)
-            if (isSaved) EditorButton("DELETE", onClick = onDelete)
             EditorButton("✕", onClick = onClose)
         }
-        if (isBuiltIn) {
-            Text(
-                "Built-in recipe: changes are saved as a new recipe.",
-                color = MutedColor, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
-                modifier = Modifier.padding(horizontal = 16.dp)
-            )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(start = 10.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            EditorButton(if (isFavorite) "★ FAVORITE" else "☆ FAVORITE", highlighted = isFavorite, onClick = onToggleFavorite)
+            if (isSaved && canMoveUp) EditorButton("◀ MOVE", onClick = { onMove(-1) })
+            if (isSaved && canMoveDown) EditorButton("MOVE ▶", onClick = { onMove(1) })
+            EditorButton("SHARE", onClick = onShare)
+            if (isSaved) EditorButton("DELETE", onClick = onDelete)
         }
+        if (isBuiltIn) Note("Built-in recipe: saving creates your own copy.")
 
         LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            fun section(s: EditorSection, content: @Composable () -> Unit) {
-                item(key = s.name) {
-                    SectionHeader(s.title, expanded = s.name in open) {
-                        open = if (s.name in open) open - s.name else open + s.name
+            RecipeSections.forEach { section ->
+                item(key = section.title) {
+                    val expanded = section.title in open
+                    SectionHeader(section.title, expanded) {
+                        open = if (expanded) open - section.title else open + section.title
                     }
-                    if (s.name in open) content()
-                }
-            }
-
-            section(EditorSection.COLOR) {
-                ParamSlider("Warm (red gain)", draft.redGain, 0.85f..1.15f, 1f) { onChange(draft.copy(redGain = it)) }
-                ParamSlider("Cool (blue gain)", draft.blueGain, 0.85f..1.15f, 1f) { onChange(draft.copy(blueGain = it)) }
-                ParamSlider("Tint (green ↔ magenta)", draft.tint, -0.1f..0.1f, 0f, 3) { onChange(draft.copy(tint = it)) }
-            }
-            section(EditorSection.SATURATION) {
-                ParamSlider("Red saturation", draft.satR, 0f..1.6f, 1f) { onChange(draft.copy(satR = it)) }
-                ParamSlider("Green saturation", draft.satG, 0f..1.6f, 1f) { onChange(draft.copy(satG = it)) }
-                ParamSlider("Blue saturation", draft.satB, 0f..1.6f, 1f) { onChange(draft.copy(satB = it)) }
-                ParamSlider("Color chrome", draft.colorChrome, 0f..1f, 0f) { onChange(draft.copy(colorChrome = it)) }
-            }
-            section(EditorSection.MONO) {
-                val mono = draft.mono
-                Chips(
-                    options = listOf("COLOR", "MONO"),
-                    selected = if (mono == null) 0 else 1,
-                    onSelect = { onChange(draft.copy(mono = if (it == 1) Triple(0.30f, 0.60f, 0.10f) else null)) }
-                )
-                if (mono != null) {
-                    ParamSlider("Red filter", mono.first, 0f..1f, 0.3f) { onChange(draft.copy(mono = mono.copy(first = it))) }
-                    ParamSlider("Green filter", mono.second, 0f..1f, 0.6f) { onChange(draft.copy(mono = mono.copy(second = it))) }
-                    ParamSlider("Blue filter", mono.third, 0f..1f, 0.1f) { onChange(draft.copy(mono = mono.copy(third = it))) }
-                }
-            }
-            section(EditorSection.TONE) {
-                ParamSlider("Black point (fade)", draft.blackPoint, 0f..0.1f, 0f, 3) { onChange(draft.copy(blackPoint = it)) }
-                ParamSlider("Shadows", draft.shadows, -0.1f..0.08f, 0f, 3) { onChange(draft.copy(shadows = it)) }
-                ParamSlider("Midtones", draft.mids, -0.08f..0.08f, 0f, 3) { onChange(draft.copy(mids = it)) }
-                ParamSlider("Highlights", draft.highlights, -0.08f..0.08f, 0f, 3) { onChange(draft.copy(highlights = it)) }
-                ParamSlider("White point", draft.whitePoint, 0.88f..1f, 1f, 3) { onChange(draft.copy(whitePoint = it)) }
-            }
-            section(EditorSection.SPLIT) {
-                Chips(listOf("SHADOWS", "MIDS", "HIGHLIGHTS"), tintTarget, onSelect = { tintTarget = it })
-                val tint = when (tintTarget) { 0 -> draft.shadowTint; 1 -> draft.midTint; else -> draft.highlightTint }
-                fun set(t: Tint) = onChange(
-                    when (tintTarget) {
-                        0 -> draft.copy(shadowTint = t)
-                        1 -> draft.copy(midTint = t)
-                        else -> draft.copy(highlightTint = t)
+                    if (expanded) {
+                        section.note?.let { Note(it) }
+                        section.params.forEach { ParamControl(it, draft, onChange) }
+                        when (section.special) {
+                            SpecialEditor.MONO -> MonoEditor(draft, onChange)
+                            SpecialEditor.BANDS -> BandsEditor(draft, band, { band = it }, onChange)
+                            SpecialEditor.CURVES -> CurvesEditor(draft, curveChannel, { curveChannel = it }, onChange)
+                            SpecialEditor.LUT -> LutEditor(draft, luts, onChange, onImportLut, onDeleteLut)
+                            SpecialEditor.DEFAULT_LENS -> {
+                                Label("Lens when picked")
+                                val options = listOf(0) + lensOptions
+                                Chips(
+                                    options = options.map { if (it == 0) "KEEP" else "$it mm" },
+                                    selected = options.indexOf(draft.defaultLensMm).coerceAtLeast(0),
+                                    onSelect = { onChange(draft.copy(defaultLensMm = options[it])) }
+                                )
+                            }
+                            null -> Unit
+                        }
+                        Spacer(Modifier.height(8.dp))
                     }
-                )
-                ParamSlider("Red", tint.r, -0.05f..0.05f, 0f, 3) { set(tint.copy(r = it)) }
-                ParamSlider("Green", tint.g, -0.05f..0.05f, 0f, 3) { set(tint.copy(g = it)) }
-                ParamSlider("Blue", tint.b, -0.05f..0.05f, 0f, 3) { set(tint.copy(b = it)) }
-            }
-            section(EditorSection.HSL) {
-                val bands = ColorBand.entries
-                Chips(
-                    options = bands.map { it.label },
-                    selected = band,
-                    onSelect = { band = it },
-                    swatches = bands.map { Color(it.swatch) },
-                    marked = bands.map { draft.hsl[it]?.isNeutral == false }
-                )
-                val b = bands[band]
-                val adj = draft.hsl[b] ?: HslAdjust()
-                fun set(a: HslAdjust) = onChange(draft.copy(hsl = draft.hsl + (b to a)))
-                ParamSlider("Hue shift (°)", adj.hue, -30f..30f, 0f, 0) { set(adj.copy(hue = it)) }
-                ParamSlider("Saturation", adj.sat, -1f..1f, 0f) { set(adj.copy(sat = it)) }
-                ParamSlider("Luminance", adj.lum, -0.5f..0.5f, 0f) { set(adj.copy(lum = it)) }
-            }
-            section(EditorSection.TEXTURE) {
-                ParamSlider("Clarity", draft.clarity, -0.5f..0.5f, 0f) { onChange(draft.copy(clarity = it)) }
-                ParamSlider("Halation", draft.halation, 0f..1f, 0f) { onChange(draft.copy(halation = it)) }
-                ParamSlider("Vignette", draft.vignette, 0f..1f, 0f) { onChange(draft.copy(vignette = it)) }
-                ParamSlider("Grain", draft.grain, 0f..0.1f, 0f, 3) { onChange(draft.copy(grain = it)) }
-                ParamSlider("Grain size", draft.grainSize, 1f..3f, 1f) { onChange(draft.copy(grainSize = it)) }
-                ParamSlider("Grain color", draft.grainColor, 0f..1f, 0f) { onChange(draft.copy(grainColor = it)) }
+                }
             }
             item(key = "reset") {
                 Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
@@ -186,6 +146,135 @@ fun RecipeEditor(
             }
         }
     }
+}
+
+@Composable
+private fun ParamControl(p: RecipeParam, draft: FilmRecipe, onChange: (FilmRecipe) -> Unit) {
+    when (p) {
+        is FloatParam -> ParamSlider(p.label, p.get(draft), p.min..p.max, p.default, p.decimals) { onChange(p.set(draft, it)) }
+        is ChoiceParam -> {
+            Label(p.label)
+            Chips(
+                options = p.options.map { it.label },
+                selected = p.options.indexOf(p.get(draft)),
+                onSelect = { onChange(p.set(draft, p.options[it])) }
+            )
+        }
+        is ToggleParam -> {
+            Label(p.label)
+            Chips(listOf("OFF", "ON"), if (p.get(draft)) 1 else 0, onSelect = { onChange(p.set(draft, it == 1)) })
+        }
+    }
+}
+
+@Composable
+private fun MonoEditor(draft: FilmRecipe, onChange: (FilmRecipe) -> Unit) {
+    val mono = draft.mono
+    Chips(
+        options = listOf("COLOR", "MONO"),
+        selected = if (mono == null) 0 else 1,
+        onSelect = { onChange(draft.copy(mono = if (it == 1) Triple(0.30f, 0.60f, 0.10f) else null)) }
+    )
+    if (mono != null) {
+        Note("Filter weights: red-heavy darkens skies, blue-heavy makes them moody.")
+        ParamSlider("Red filter", mono.first, 0f..1f, 0.3f) { onChange(draft.copy(mono = mono.copy(first = it))) }
+        ParamSlider("Green filter", mono.second, 0f..1f, 0.6f) { onChange(draft.copy(mono = mono.copy(second = it))) }
+        ParamSlider("Blue filter", mono.third, 0f..1f, 0.1f) { onChange(draft.copy(mono = mono.copy(third = it))) }
+    }
+}
+
+@Composable
+private fun BandsEditor(draft: FilmRecipe, band: Int, onBand: (Int) -> Unit, onChange: (FilmRecipe) -> Unit) {
+    val bands = ColorBand.entries
+    Chips(
+        options = bands.map { it.label },
+        selected = band,
+        onSelect = onBand,
+        swatches = bands.map { Color(it.swatch) },
+        marked = bands.map { draft.hsl[it]?.isNeutral == false }
+    )
+    val b = bands[band]
+    val adj = draft.hsl[b] ?: HslAdjust()
+    fun set(a: HslAdjust) = onChange(draft.copy(hsl = draft.hsl + (b to a)))
+    ParamSlider("Hue shift (°)", adj.hue, -30f..30f, 0f, 0) { set(adj.copy(hue = it)) }
+    ParamSlider("Saturation", adj.sat, -1f..1f, 0f) { set(adj.copy(sat = it)) }
+    ParamSlider("Luminance", adj.lum, -0.5f..0.5f, 0f) { set(adj.copy(lum = it)) }
+}
+
+@Composable
+private fun CurvesEditor(draft: FilmRecipe, channel: Int, onChannel: (Int) -> Unit, onChange: (FilmRecipe) -> Unit) {
+    Note("The graph shows the recipe's whole tone response. Each slider bends the curve at one input level.")
+    ToneGraph(draft)
+    val channels = CurveChannel.entries
+    Chips(
+        options = channels.map { it.label },
+        selected = channel,
+        onSelect = onChannel,
+        marked = channels.map { ch -> draft.curve(ch).any { it != 0f } }
+    )
+    val ch = channels[channel]
+    val pts = draft.curve(ch)
+    pts.forEachIndexed { i, v ->
+        val input = (i * 100f / (CURVE_POINTS - 1)).toInt()
+        ParamSlider("Input $input%", v, -0.2f..0.2f, 0f, 3) { nv ->
+            val updated = pts.toMutableList().also { it[i] = nv }
+            onChange(draft.copy(curves = draft.curves + (ch to updated)))
+        }
+    }
+}
+
+/** The final per-channel tone tables (red, green, blue) drawn as curves. */
+@Composable
+private fun ToneGraph(draft: FilmRecipe) {
+    val lut = draft.lut
+    Canvas(
+        modifier = Modifier
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .fillMaxWidth()
+            .height(120.dp)
+            .border(1.dp, Color.White.copy(alpha = 0.2f))
+    ) {
+        val w = size.width
+        val h = size.height
+        for (i in 1..3) {
+            drawLine(Color.White.copy(alpha = 0.1f), Offset(w * i / 4f, 0f), Offset(w * i / 4f, h))
+            drawLine(Color.White.copy(alpha = 0.1f), Offset(0f, h * i / 4f), Offset(w, h * i / 4f))
+        }
+        drawLine(Color.White.copy(alpha = 0.25f), Offset(0f, h), Offset(w, 0f))
+        val colors = listOf(Color(0xFFFF6B6B), Color(0xFF6BE38C), Color(0xFF6B9BFF))
+        for (ch in 0 until 3) {
+            val path = Path()
+            for (i in 0 until 256) {
+                val x = i / 255f * w
+                val y = h - lut[ch * 256 + i] / 255f * h
+                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            drawPath(path, colors[ch].copy(alpha = 0.85f), style = Stroke(width = 2f))
+        }
+    }
+}
+
+@Composable
+private fun LutEditor(
+    draft: FilmRecipe,
+    luts: List<String>,
+    onChange: (FilmRecipe) -> Unit,
+    onImport: () -> Unit,
+    onDelete: (String) -> Unit,
+) {
+    Note("Imported .cube LUTs run after the tone curve. Strength blends with the recipe underneath.")
+    val options = listOf<String?>(null) + luts
+    Chips(
+        options = options.map { it ?: "NONE" },
+        selected = options.indexOf(draft.lutName).coerceAtLeast(0),
+        onSelect = { onChange(draft.copy(lutName = options[it])) }
+    )
+    if (draft.lutName != null && draft.lutName !in luts) Note("This recipe's LUT \"${draft.lutName}\" isn't on this phone; import it to use it.")
+    Row(Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
+        EditorButton("IMPORT .CUBE", onClick = onImport)
+        draft.lutName?.takeIf { it in luts }?.let { name -> EditorButton("DELETE LUT", onClick = { onDelete(name) }) }
+    }
+    ParamSlider("Strength", draft.lutStrength, 0f..1f, 1f) { onChange(draft.copy(lutStrength = it)) }
 }
 
 @Composable
@@ -205,6 +294,22 @@ private fun SectionHeader(title: String, expanded: Boolean, onClick: () -> Unit)
     }
 }
 
+@Composable
+private fun Note(text: String) {
+    Text(
+        text, color = MutedColor, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+    )
+}
+
+@Composable
+private fun Label(text: String) {
+    Text(
+        text, color = LabelColor, fontFamily = FontFamily.Monospace, fontSize = 12.sp,
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp)
+    )
+}
+
 /** Labelled slider; the value turns amber when changed, and tapping it resets to [default]. */
 @Composable
 private fun ParamSlider(
@@ -219,8 +324,9 @@ private fun ParamSlider(
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(label, color = LabelColor, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.weight(1f))
+            val signed = range.start < 0f
             Text(
-                text = String.format(Locale.US, "%+.${decimals}f", value).let { if (default != 0f) it.removePrefix("+") else it },
+                text = String.format(Locale.US, if (signed) "%+.${decimals}f" else "%.${decimals}f", value),
                 color = if (changed) HudAmber else MutedColor,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 12.sp,
