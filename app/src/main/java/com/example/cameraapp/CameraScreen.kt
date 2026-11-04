@@ -69,7 +69,7 @@ fun CameraScreen() {
             val cameraProvider = providerFuture.get()
             provider = cameraProvider
             val preview = Preview.Builder().build().also {
-                it.surfaceProvider = previewView.surfaceProvider
+                it.setSurfaceProvider(previewView.surfaceProvider)
             }
             try {
                 cameraProvider.unbindAll()
