@@ -141,9 +141,38 @@ fun CameraScreen() {
         set.byKey(selectedLensKey) ?: set.defaultFor(CameraSelector.LENS_FACING_BACK)
             ?: set.lenses.firstOrNull()
     }
-    // Film recipe (null = standard). Kept while the app runs.
+    // Film recipes: built-in ones plus the user's own, saved on the phone.
+    val recipeStore = remember { RecipeStore(context) }
+    var customRecipes by remember { mutableStateOf(recipeStore.load()) }
+    val allRecipes = FilmRecipes + customRecipes
+    // Selected recipe (null = standard). Kept while the app runs.
     var recipeId by rememberSaveable { mutableStateOf<String?>(null) }
-    val recipe = FilmRecipes.firstOrNull { it.id == recipeId }
+    val selectedRecipe = allRecipes.firstOrNull { it.id == recipeId }
+    // Recipe open in the editor, if any; the preview shows it live while editing.
+    var draft by remember { mutableStateOf<FilmRecipe?>(null) }
+    val recipe = draft ?: selectedRecipe
+
+    val saveDraft: () -> Unit = save@{
+        val d = draft ?: return@save
+        val named = d.copy(label = d.label.trim().ifEmpty { "RECIPE" })
+        // Built-in recipes are never overwritten: saving one creates a copy.
+        val toSave = if (FilmRecipes.any { it.id == named.id }) named.copy(id = newRecipeId()) else named
+        customRecipes = if (customRecipes.any { it.id == toSave.id }) {
+            customRecipes.map { if (it.id == toSave.id) toSave else it }
+        } else {
+            customRecipes + toSave
+        }
+        recipeStore.save(customRecipes)
+        recipeId = toSave.id
+        draft = null
+    }
+    val deleteDraft: () -> Unit = delete@{
+        val d = draft ?: return@delete
+        customRecipes = customRecipes.filterNot { it.id == d.id }
+        recipeStore.save(customRecipes)
+        if (recipeId == d.id) recipeId = null
+        draft = null
+    }
 
     val baseFormat =
         if (lens != null && format.outputFormat in lens.supportedFormats) format else CaptureFormat.JPEG
@@ -159,11 +188,12 @@ fun CameraScreen() {
         }
 
     // Live film preview: GPU shader on Android 13+, colour matrix only on Android 12.
-    val filmShader = remember(recipe) {
-        if (recipe != null && Build.VERSION.SDK_INT >= 33) {
+    // The shader is compiled once; switching or editing recipes only updates its inputs.
+    val filmShader = remember {
+        if (Build.VERSION.SDK_INT >= 33) {
             // AGSL is compiled on the device; fall back to the colour-matrix preview if it fails.
             try {
-                FilmPreviewShader(recipe)
+                FilmPreviewShader()
             } catch (e: Exception) {
                 Log.e(TAG, "Film preview shader unavailable", e)
                 null
@@ -172,10 +202,24 @@ fun CameraScreen() {
             null
         }
     }
+    // The recipe the shader currently holds (null when none is applied).
+    val shaderRecipe = remember(filmShader, recipe) {
+        if (filmShader != null && recipe != null && Build.VERSION.SDK_INT >= 33) {
+            try {
+                filmShader.update(recipe)
+                recipe
+            } catch (e: Exception) {
+                Log.e(TAG, "Film preview update failed", e)
+                null
+            }
+        } else {
+            null
+        }
+    }
     var grainSeed by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(filmShader) {
+    LaunchedEffect(shaderRecipe?.grain) {
         // Re-seed the grain ~12 times a second so it moves like film rather than sitting on the glass.
-        if (filmShader == null || (recipe?.grain ?: 0f) <= 0f) return@LaunchedEffect
+        if (shaderRecipe == null || shaderRecipe.grain <= 0f) return@LaunchedEffect
         while (isActive) {
             delay(83)
             grainSeed = (grainSeed + 1.618f) % 1000f
@@ -309,7 +353,7 @@ fun CameraScreen() {
                 .graphicsLayer {
                     // Reading grainSeed here only redraws this layer, not the whole screen.
                     renderEffect = when {
-                        filmShader != null -> {
+                        filmShader != null && shaderRecipe != null && Build.VERSION.SDK_INT >= 33 -> {
                             // Where the 4:3 image sits inside the letterboxed view.
                             val ratio = if (size.height > size.width) 3f / 4f else 4f / 3f
                             val frameW = min(size.width, size.height * ratio)
@@ -393,7 +437,7 @@ fun CameraScreen() {
                 onItemClick = { openPicker = if (shownPicker == it) null else it }
             )
             val pickerModifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp)
-            when (shownPicker) {
+            if (draft == null) when (shownPicker) {
                 HudItem.FOCAL -> PickerRow(
                     labels = facingLenses.map { "${it.equivFocalMm ?: "?"} mm" },
                     selectedIndex = facingLenses.indexOfFirst { it.key == lens?.key },
@@ -453,15 +497,24 @@ fun CameraScreen() {
                     modifier = pickerModifier
                 )
                 HudItem.RECIPE -> PickerRow(
-                    // Stays open so looks can be compared live.
-                    labels = listOf("STD") + FilmRecipes.map { it.label },
-                    selectedIndex = FilmRecipes.indexOf(recipe) + 1,
-                    onSelect = { i -> recipeId = if (i == 0) null else FilmRecipes[i - 1].id },
+                    // Stays open so looks can be compared live; the last entry opens the editor.
+                    labels = listOf("STD") + allRecipes.map { it.label } + "\u270E EDIT",
+                    selectedIndex = allRecipes.indexOfFirst { it.id == selectedRecipe?.id } + 1,
+                    onSelect = { i ->
+                        when {
+                            i == 0 -> recipeId = null
+                            i <= allRecipes.size -> recipeId = allRecipes[i - 1].id
+                            else -> {
+                                draft = selectedRecipe ?: FilmRecipe(id = newRecipeId(), label = "MY RECIPE")
+                                openPicker = null
+                            }
+                        }
+                    },
                     modifier = pickerModifier
                 )
                 null -> Unit
             }
-            FlowRow(
+            if (draft == null) FlowRow(
                 modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -537,7 +590,33 @@ fun CameraScreen() {
 
         val isLandscape =
             LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-        if (isLandscape) {
+        val editing = draft
+        if (editing != null) {
+            // Recipe editor over the lower half (portrait) or right half (landscape); the live
+            // preview stays visible above / beside it.
+            RecipeEditor(
+                draft = editing,
+                isBuiltIn = FilmRecipes.any { it.id == editing.id },
+                isSaved = customRecipes.any { it.id == editing.id },
+                onChange = { draft = it },
+                onSave = saveDraft,
+                onDelete = deleteDraft,
+                onClose = { draft = null },
+                modifier = if (isLandscape) {
+                    Modifier
+                        .align(Alignment.CenterEnd)
+                        .fillMaxHeight()
+                        .fillMaxWidth(0.5f)
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.End + WindowInsetsSides.Vertical))
+                } else {
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .fillMaxHeight(0.55f)
+                        .navigationBarsPadding()
+                }
+            )
+        } else if (isLandscape) {
             // Landscape: controls stacked on the right edge, shutter centred under the thumb.
             Row(
                 modifier = Modifier
