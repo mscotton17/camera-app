@@ -157,31 +157,32 @@ data class ExposureSettings(
 
 /** Sends [settings] to the camera; they apply to the preview and to every still capture. */
 @SuppressLint("UnsafeOptInUsageError") // Camera2CameraControl is @ExperimentalCamera2Interop
-fun applyExposure(camera: Camera, settings: ExposureSettings) {
+fun applyExposure(camera: Camera, settings: ExposureSettings, awbMode: Int? = null) {
     val control = Camera2CameraControl.from(camera.cameraControl)
     val shutter = settings.shutterNs
     val iso = settings.iso
     val aperture = settings.aperture
-    if (shutter == null || iso == null) {
-        if (aperture == null) {
-            control.clearCaptureRequestOptions()
-        } else {
-            control.setCaptureRequestOptions(
-                CaptureRequestOptions.Builder()
-                    .setCaptureRequestOption(CaptureRequest.LENS_APERTURE, aperture)
-                    .build()
-            )
-        }
-        return
-    }
+    // One options set carries everything, because setting it replaces whatever was there.
     val builder = CaptureRequestOptions.Builder()
-        .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-        .setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, shutter)
-        .setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, iso)
-        // Long exposures need a long enough frame; otherwise keep ~30fps.
-        .setCaptureRequestOption(CaptureRequest.SENSOR_FRAME_DURATION, max(shutter, 33_333_333L))
-    if (aperture != null) builder.setCaptureRequestOption(CaptureRequest.LENS_APERTURE, aperture)
-    control.setCaptureRequestOptions(builder.build())
+    var any = false
+    if (shutter != null && iso != null) {
+        builder.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+            .setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, shutter)
+            .setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, iso)
+            // Long exposures need a long enough frame; otherwise keep ~30fps.
+            .setCaptureRequestOption(CaptureRequest.SENSOR_FRAME_DURATION, max(shutter, 33_333_333L))
+        any = true
+    }
+    if (aperture != null) {
+        builder.setCaptureRequestOption(CaptureRequest.LENS_APERTURE, aperture)
+        any = true
+    }
+    if (awbMode != null && awbMode != CaptureRequest.CONTROL_AWB_MODE_AUTO) {
+        // A fixed white balance, like film balanced for one kind of light.
+        builder.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, awbMode)
+        any = true
+    }
+    if (any) control.setCaptureRequestOptions(builder.build()) else control.clearCaptureRequestOptions()
 }
 
 /** Mean brightness (0..1) of the camera image within a FIT_CENTER [preview] bitmap. */

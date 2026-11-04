@@ -51,6 +51,8 @@ data class ExposureCaps(
     val isoRange: Range<Int>?,
     /** f-stops the lens can use; phone lenses almost always have exactly one. */
     val apertures: List<Float>,
+    /** White-balance modes the camera accepts (Camera2 CONTROL_AWB_MODE_*). */
+    val awbModes: Set<Int> = emptySet(),
 ) {
     val variableAperture: Boolean get() = apertures.size > 1
 }
@@ -66,6 +68,7 @@ private fun exposureCaps(lensChars: CameraCharacteristics, cameraChars: CameraCh
             ?: cameraChars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE),
         apertures = lensChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
             ?.toList()?.distinct()?.sorted().orEmpty(),
+        awbModes = cameraChars.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)?.toSet().orEmpty(),
     )
 
 data class LensSet(val lenses: List<Lens>, private val defaults: Map<Int, String>) {

@@ -1,6 +1,8 @@
 package com.example.cameraapp
 
 import android.content.Context
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import android.content.res.Configuration
 import android.hardware.display.DisplayManager
 import android.os.Build
@@ -67,6 +69,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -143,8 +146,16 @@ fun CameraScreen() {
     }
     // Film recipes: built-in ones plus the user's own, saved on the phone.
     val recipeStore = remember { RecipeStore(context) }
-    var customRecipes by remember { mutableStateOf(recipeStore.load()) }
-    val allRecipes = FilmRecipes + customRecipes
+    var library by remember { mutableStateOf(recipeStore.load()) }
+    val customRecipes = library.recipes
+    // Favourites first (in the order they were starred), then built-ins, then the user's own.
+    val allRecipes = run {
+        val all = FilmRecipes + customRecipes
+        val favs = library.favorites.mapNotNull { id -> all.firstOrNull { it.id == id } }
+        favs + all.filterNot { it in favs }
+    }
+    val updateLibrary: (RecipeLibrary) -> Unit = { library = it; recipeStore.save(it) }
+    var luts by remember { mutableStateOf(CubeLuts.list(context)) }
     // Selected recipe (null = standard). Kept while the app runs.
     var recipeId by rememberSaveable { mutableStateOf<String?>(null) }
     val selectedRecipe = allRecipes.firstOrNull { it.id == recipeId }
@@ -157,21 +168,65 @@ fun CameraScreen() {
         val named = d.copy(label = d.label.trim().ifEmpty { "RECIPE" })
         // Built-in recipes are never overwritten: saving one creates a copy.
         val toSave = if (FilmRecipes.any { it.id == named.id }) named.copy(id = newRecipeId()) else named
-        customRecipes = if (customRecipes.any { it.id == toSave.id }) {
+        val recipes = if (customRecipes.any { it.id == toSave.id }) {
             customRecipes.map { if (it.id == toSave.id) toSave else it }
         } else {
             customRecipes + toSave
         }
-        recipeStore.save(customRecipes)
+        // A favourite built-in stays a favourite; its saved copy starts unstarred.
+        updateLibrary(library.copy(recipes = recipes))
         recipeId = toSave.id
         draft = null
     }
     val deleteDraft: () -> Unit = delete@{
         val d = draft ?: return@delete
-        customRecipes = customRecipes.filterNot { it.id == d.id }
-        recipeStore.save(customRecipes)
+        updateLibrary(RecipeLibrary(customRecipes.filterNot { it.id == d.id }, library.favorites - d.id))
         if (recipeId == d.id) recipeId = null
         draft = null
+    }
+    val toggleFavorite: () -> Unit = fav@{
+        val id = draft?.id ?: return@fav
+        val favs = if (id in library.favorites) library.favorites - id else library.favorites + id
+        updateLibrary(library.copy(favorites = favs))
+    }
+    val moveDraft: (Int) -> Unit = move@{ dir ->
+        val id = draft?.id ?: return@move
+        val i = customRecipes.indexOfFirst { it.id == id }
+        val j = i + dir
+        if (i < 0 || j !in customRecipes.indices) return@move
+        val list = customRecipes.toMutableList()
+        java.util.Collections.swap(list, i, j)
+        updateLibrary(library.copy(recipes = list))
+    }
+
+    val importLutLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val name = CubeLuts.import(context, uri)
+        if (name == null) {
+            Toast.makeText(context, "That isn't a 3D .cube LUT", Toast.LENGTH_LONG).show()
+        } else {
+            luts = CubeLuts.list(context)
+            draft = draft?.copy(lutName = name)
+            Toast.makeText(context, "Imported LUT $name", Toast.LENGTH_SHORT).show()
+        }
+    }
+    val importRecipeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val imported = try {
+            importRecipes(context, uri)
+        } catch (e: Exception) {
+            Log.e(TAG, "Recipe import failed", e)
+            emptyList()
+        }
+        if (imported.isEmpty()) {
+            Toast.makeText(context, "No recipes found in that file", Toast.LENGTH_LONG).show()
+        } else {
+            updateLibrary(library.copy(recipes = customRecipes + imported))
+            recipeId = imported.first().id
+            val missing = imported.mapNotNull { it.lutName }.filter { it !in luts }.distinct()
+            val note = if (missing.isEmpty()) "" else ". Import LUT ${missing.joinToString()} to use it"
+            Toast.makeText(context, "Imported ${imported.size} recipe(s)$note", Toast.LENGTH_LONG).show()
+        }
     }
 
     val baseFormat =
@@ -203,10 +258,11 @@ fun CameraScreen() {
         }
     }
     // The recipe the shader currently holds (null when none is applied).
-    val shaderRecipe = remember(filmShader, recipe) {
+    val recipeCube = remember(recipe?.lutName, luts) { CubeLuts.load(context, recipe?.lutName) }
+    val shaderRecipe = remember(filmShader, recipe, recipeCube) {
         if (filmShader != null && recipe != null && Build.VERSION.SDK_INT >= 33) {
             try {
-                filmShader.update(recipe)
+                filmShader.update(recipe, recipeCube)
                 recipe
             } catch (e: Exception) {
                 Log.e(TAG, "Film preview update failed", e)
@@ -223,6 +279,29 @@ fun CameraScreen() {
         while (isActive) {
             delay(83)
             grainSeed = (grainSeed + 1.618f) % 1000f
+        }
+    }
+
+    // Re-develop an existing DNG or JPEG with the selected recipe into a new JPEG.
+    val developLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val r = selectedRecipe
+        if (uri == null || r == null) return@rememberLauncherForActivityResult
+        Toast.makeText(context, "Developing with ${r.label}\u2026", Toast.LENGTH_SHORT).show()
+        val main = ContextCompat.getMainExecutor(context)
+        ioExecutor.execute {
+            val result = try {
+                developImage(context, uri, r)
+            } catch (e: Throwable) {
+                Log.e(TAG, "Develop failed", e)
+                null
+            }
+            main.execute {
+                Toast.makeText(
+                    context,
+                    if (result != null) "Saved ${r.label} version" else "Couldn't develop that file",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
     }
 
@@ -253,19 +332,40 @@ fun CameraScreen() {
         onDispose { displayManager.unregisterDisplayListener(listener) }
     }
 
-    // Exposure overrides limited to what the current lens supports.
+    // Picking a recipe applies its camera defaults (EV, format, lens), if it has any.
+    LaunchedEffect(selectedRecipe?.id) {
+        val r = selectedRecipe ?: return@LaunchedEffect
+        if (r.defaultEvOn) evComp = r.defaultEv
+        r.defaultFormat.format?.let { format = it }
+        if (r.defaultLensMm > 0) {
+            val facing = lens?.facing ?: CameraSelector.LENS_FACING_BACK
+            lensSet?.forFacing(facing)
+                ?.filter { it.equivFocalMm != null }
+                ?.minByOrNull { kotlin.math.abs(it.equivFocalMm!! - r.defaultLensMm) }
+                ?.let { selectedLensKey = it.key }
+        }
+    }
+
+    // Exposure overrides limited to what the current lens supports, plus the recipe's fixed
+    // white balance if the camera offers it.
     val resolvedExposure = lens?.let { exposure.resolvedFor(it.exposure) } ?: ExposureSettings()
-    LaunchedEffect(bound, resolvedExposure) { bound?.camera?.let { applyExposure(it, resolvedExposure) } }
+    val awbMode = recipe?.whiteBalance?.awbMode?.takeIf { lens?.exposure?.awbModes?.contains(it) == true }
+    LaunchedEffect(bound, resolvedExposure, awbMode) {
+        bound?.camera?.let { applyExposure(it, resolvedExposure, awbMode) }
+    }
+    // DR200 / DR400 underexpose by 1 / 2 stops; the recipe's tone curve lifts it back.
+    val drStops = recipe?.dynamicRange?.stops ?: 0
+    val meteringEv = evComp - drStops
 
     // In full auto, EV compensation goes through the camera's own auto-exposure.
-    LaunchedEffect(bound, evComp, resolvedExposure.manualSensor) {
+    LaunchedEffect(bound, meteringEv, resolvedExposure.manualSensor) {
         val cam = bound?.camera ?: return@LaunchedEffect
-        if (!resolvedExposure.manualSensor) applyAeCompensation(cam, evComp)
+        if (!resolvedExposure.manualSensor) applyAeCompensation(cam, meteringEv)
     }
 
     // Shutter/ISO priority: the camera can't auto-adjust just one of them, so meter the preview
     // ourselves a few times a second and nudge the unlocked value.
-    LaunchedEffect(bound, resolvedExposure.priorityMode, lens?.key) {
+    LaunchedEffect(bound, resolvedExposure.priorityMode, lens?.key, meteringEv) {
         val caps = lens?.exposure ?: return@LaunchedEffect
         if (bound == null || !resolvedExposure.priorityMode) return@LaunchedEffect
         while (isActive) {
@@ -274,7 +374,7 @@ fun CameraScreen() {
             delay(max(250L, frameMs * 3))
             if (capturing) continue
             val luma = previewView.bitmap?.let { meanLuma(it) } ?: continue
-            val next = exposure.resolvedFor(caps).meteredStep(luma, caps, evComp)
+            val next = exposure.resolvedFor(caps).meteredStep(luma, caps, meteringEv)
             if (next != exposure) exposure = next
         }
     }
@@ -354,14 +454,10 @@ fun CameraScreen() {
                     // Reading grainSeed here only redraws this layer, not the whole screen.
                     renderEffect = when {
                         filmShader != null && shaderRecipe != null && Build.VERSION.SDK_INT >= 33 -> {
-                            // Where the 4:3 image sits inside the letterboxed view.
-                            val ratio = if (size.height > size.width) 3f / 4f else 4f / 3f
-                            val frameW = min(size.width, size.height * ratio)
-                            val frameH = frameW / ratio
-                            filmShader.effect(
-                                grainSeed,
-                                (size.width - frameW) / 2f, (size.height - frameH) / 2f, frameW, frameH
-                            ).asComposeRenderEffect()
+                            // Position-based effects follow the recipe's crop of the 4:3 image.
+                            val crop = previewCropRect(previewImageRect(size), shaderRecipe.aspect)
+                            filmShader.effect(grainSeed, crop.left, crop.top, crop.width, crop.height)
+                                .asComposeRenderEffect()
                         }
                         recipe != null && Build.VERSION.SDK_INT >= 31 ->
                             filmColorFilterEffect(recipe).asComposeRenderEffect()
@@ -369,6 +465,9 @@ fun CameraScreen() {
                     }
                 }
         )
+
+        // Aspect crop, border and date stamp as they'll appear on the photo.
+        recipe?.let { FilmFrameOverlay(it, Modifier.fillMaxSize()) }
 
         // Gesture layer over the preview: tap to focus/meter.
         Box(
@@ -497,16 +596,27 @@ fun CameraScreen() {
                     modifier = pickerModifier
                 )
                 HudItem.RECIPE -> PickerRow(
-                    // Stays open so looks can be compared live; the last entry opens the editor.
-                    labels = listOf("STD") + allRecipes.map { it.label } + "\u270E EDIT",
+                    // Stays open so looks can be compared live; the last entries are actions.
+                    labels = listOf("STD") +
+                        allRecipes.map { if (it.id in library.favorites) "\u2605 ${it.label}" else it.label } +
+                        listOf("\u270E EDIT", "\u2B07 IMPORT", "\u2699 DEVELOP"),
                     selectedIndex = allRecipes.indexOfFirst { it.id == selectedRecipe?.id } + 1,
                     onSelect = { i ->
+                        val action = i - allRecipes.size - 1
                         when {
                             i == 0 -> recipeId = null
-                            i <= allRecipes.size -> recipeId = allRecipes[i - 1].id
-                            else -> {
+                            action < 0 -> recipeId = allRecipes[i - 1].id
+                            action == 0 -> {
                                 draft = selectedRecipe ?: FilmRecipe(id = newRecipeId(), label = "MY RECIPE")
                                 openPicker = null
+                            }
+                            action == 1 -> importRecipeLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                            else -> {
+                                if (selectedRecipe == null) {
+                                    Toast.makeText(context, "Pick a recipe first, then DEVELOP a DNG or JPEG with it", Toast.LENGTH_LONG).show()
+                                } else {
+                                    developLauncher.launch(arrayOf("image/*"))
+                                }
                             }
                         }
                     },
@@ -598,10 +708,25 @@ fun CameraScreen() {
                 draft = editing,
                 isBuiltIn = FilmRecipes.any { it.id == editing.id },
                 isSaved = customRecipes.any { it.id == editing.id },
+                isFavorite = editing.id in library.favorites,
+                canMoveUp = customRecipes.indexOfFirst { it.id == editing.id } > 0,
+                canMoveDown = customRecipes.indexOfFirst { it.id == editing.id }.let { it >= 0 && it < customRecipes.size - 1 },
+                luts = luts,
+                lensOptions = lensSet?.forFacing(lens?.facing ?: CameraSelector.LENS_FACING_BACK)
+                    ?.mapNotNull { it.equivFocalMm }.orEmpty(),
                 onChange = { draft = it },
                 onSave = saveDraft,
                 onDelete = deleteDraft,
                 onClose = { draft = null },
+                onToggleFavorite = toggleFavorite,
+                onMove = moveDraft,
+                onShare = { shareRecipes(context, listOf(editing)) },
+                onImportLut = { importLutLauncher.launch(arrayOf("*/*")) },
+                onDeleteLut = { name ->
+                    CubeLuts.delete(context, name)
+                    luts = CubeLuts.list(context)
+                    draft = draft?.copy(lutName = null)
+                },
                 modifier = if (isLandscape) {
                     Modifier
                         .align(Alignment.CenterEnd)

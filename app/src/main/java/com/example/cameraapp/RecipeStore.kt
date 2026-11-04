@@ -8,38 +8,44 @@ import java.io.File
 
 private const val TAG = "RecipeStore"
 
-/** Custom (user-made) recipes, saved as JSON in the app's private storage. */
+/** The user's own recipes (in their chosen order) and favourite recipe ids (built-in or own). */
+data class RecipeLibrary(val recipes: List<FilmRecipe> = emptyList(), val favorites: List<String> = emptyList())
+
+/** Saved in the app's private storage as JSON. */
 class RecipeStore(context: Context) {
     private val file = File(context.filesDir, "recipes.json")
 
-    fun load(): List<FilmRecipe> = try {
-        if (!file.exists()) {
-            emptyList()
-        } else {
-            val array = JSONArray(file.readText())
-            (0 until array.length()).mapNotNull { i ->
-                try {
-                    recipeFromJson(array.getJSONObject(i))
-                } catch (e: Exception) {
-                    Log.w(TAG, "Skipping unreadable recipe $i", e)
-                    null
-                }
+    fun load(): RecipeLibrary = try {
+        if (!file.exists()) RecipeLibrary() else {
+            val text = file.readText().trim()
+            if (text.startsWith("[")) {
+                // Version 1: a bare array of recipes.
+                RecipeLibrary(recipesFromJsonArray(JSONArray(text)))
+            } else {
+                val o = JSONObject(text)
+                val favs = o.optJSONArray("favorites")
+                RecipeLibrary(
+                    recipesFromJsonArray(o.optJSONArray("recipes") ?: JSONArray()),
+                    (0 until (favs?.length() ?: 0)).mapNotNull { favs?.optString(it)?.takeIf { s -> s.isNotBlank() } }
+                )
             }
         }
     } catch (e: Exception) {
         Log.e(TAG, "Could not read recipes", e)
-        emptyList()
+        RecipeLibrary()
     }
 
-    fun save(recipes: List<FilmRecipe>) {
+    fun save(library: RecipeLibrary) {
         try {
-            val array = JSONArray()
-            recipes.forEach { array.put(recipeToJson(it)) }
+            val o = JSONObject()
+            o.put("version", 2)
+            o.put("recipes", JSONArray().apply { library.recipes.forEach { put(recipeToJson(it)) } })
+            o.put("favorites", JSONArray().apply { library.favorites.forEach { put(it) } })
             // Write to a temp file and swap, so a crash mid-write can't lose every recipe.
             val tmp = File(file.parentFile, "${file.name}.tmp")
-            tmp.writeText(array.toString(2))
+            tmp.writeText(o.toString(2))
             if (!tmp.renameTo(file)) {
-                file.writeText(array.toString(2))
+                file.writeText(o.toString(2))
                 tmp.delete()
             }
         } catch (e: Exception) {
@@ -48,48 +54,84 @@ class RecipeStore(context: Context) {
     }
 }
 
-fun newRecipeId(): String = "custom_${System.currentTimeMillis()}"
+fun newRecipeId(): String = "custom_${System.currentTimeMillis()}_${(Math.random() * 1000).toInt()}"
 
-private fun JSONObject.f(name: String, default: Float): Float = optDouble(name, default.toDouble()).toFloat()
+private fun recipesFromJsonArray(array: JSONArray): List<FilmRecipe> =
+    (0 until array.length()).mapNotNull { i ->
+        try {
+            recipeFromJson(array.getJSONObject(i))
+        } catch (e: Exception) {
+            Log.w(TAG, "Skipping unreadable recipe $i", e)
+            null
+        }
+    }
 
-private fun tintToJson(t: Tint) = JSONArray().put(t.r.toDouble()).put(t.g.toDouble()).put(t.b.toDouble())
+/**
+ * Reads a shared recipe file: one recipe, an array of recipes, or a saved library.
+ * Every recipe gets a fresh id so imports never overwrite existing recipes.
+ */
+fun parseRecipeFile(text: String): List<FilmRecipe> {
+    val trimmed = text.trim()
+    val list = when {
+        trimmed.startsWith("[") -> recipesFromJsonArray(JSONArray(trimmed))
+        else -> {
+            val o = JSONObject(trimmed)
+            o.optJSONArray("recipes")?.let { recipesFromJsonArray(it) } ?: listOf(recipeFromJson(o))
+        }
+    }
+    return list.map { it.copy(id = newRecipeId()) }
+}
 
-private fun tintFromJson(a: JSONArray?): Tint =
-    if (a == null || a.length() < 3) Tint() else Tint(a.optDouble(0).toFloat(), a.optDouble(1).toFloat(), a.optDouble(2).toFloat())
+/** A shareable file for [recipes]. */
+fun recipeFileText(recipes: List<FilmRecipe>): String =
+    JSONObject().apply {
+        put("app", "CameraApp")
+        put("version", 2)
+        put("recipes", JSONArray().apply { recipes.forEach { put(recipeToJson(it)) } })
+    }.toString(2)
 
 fun recipeToJson(r: FilmRecipe): JSONObject = JSONObject().apply {
     put("id", r.id)
     put("label", r.label)
-    put("redGain", r.redGain.toDouble())
-    put("blueGain", r.blueGain.toDouble())
-    put("tint", r.tint.toDouble())
-    put("satR", r.satR.toDouble())
-    put("satG", r.satG.toDouble())
-    put("satB", r.satB.toDouble())
-    r.mono?.let { put("mono", JSONArray().put(it.first.toDouble()).put(it.second.toDouble()).put(it.third.toDouble())) }
-    put("blackPoint", r.blackPoint.toDouble())
-    put("shadows", r.shadows.toDouble())
-    put("mids", r.mids.toDouble())
-    put("highlights", r.highlights.toDouble())
-    put("whitePoint", r.whitePoint.toDouble())
-    put("shadowTint", tintToJson(r.shadowTint))
-    put("midTint", tintToJson(r.midTint))
-    put("highlightTint", tintToJson(r.highlightTint))
-    put("grain", r.grain.toDouble())
-    put("grainSize", r.grainSize.toDouble())
-    put("grainColor", r.grainColor.toDouble())
-    put("vignette", r.vignette.toDouble())
-    put("clarity", r.clarity.toDouble())
-    put("colorChrome", r.colorChrome.toDouble())
-    put("halation", r.halation.toDouble())
-    val hsl = JSONObject()
-    r.hsl.filterValues { !it.isNeutral }.forEach { (band, adj) ->
-        hsl.put(band.name, JSONArray().put(adj.hue.toDouble()).put(adj.sat.toDouble()).put(adj.lum.toDouble()))
+    for (p in AllRecipeParams) when (p) {
+        is FloatParam -> put(p.key, p.get(r).toDouble())
+        is ChoiceParam -> put(p.key, p.get(r).key)
+        is ToggleParam -> put(p.key, p.get(r))
     }
-    put("hsl", hsl)
+    r.mono?.let { put("mono", JSONArray().put(it.first.toDouble()).put(it.second.toDouble()).put(it.third.toDouble())) }
+    put("hsl", JSONObject().apply {
+        r.hsl.filterValues { !it.isNeutral }.forEach { (band, a) ->
+            put(band.name, JSONArray().put(a.hue.toDouble()).put(a.sat.toDouble()).put(a.lum.toDouble()))
+        }
+    })
+    put("curves", JSONObject().apply {
+        r.curves.filterValues { pts -> pts.any { it != 0f } }.forEach { (ch, pts) ->
+            put(ch.name, JSONArray().apply { pts.forEach { put(it.toDouble()) } })
+        }
+    })
+    r.lutName?.let { put("lutName", it) }
+    put("lutStrength", r.lutStrength.toDouble())
+    put("defaultLensMm", r.defaultLensMm)
 }
 
 fun recipeFromJson(o: JSONObject): FilmRecipe {
+    var r = FilmRecipe(
+        id = o.optString("id").ifBlank { newRecipeId() },
+        label = o.optString("label").ifBlank { "RECIPE" },
+    )
+    for (p in AllRecipeParams) when (p) {
+        is FloatParam -> {
+            val legacy = legacyTintComponent(o, p.key)
+            when {
+                o.has(p.key) -> r = p.set(r, o.optDouble(p.key, p.default.toDouble()).toFloat())
+                legacy != null -> r = p.set(r, legacy)
+            }
+        }
+        is ChoiceParam -> o.optString(p.key).takeIf { it.isNotEmpty() }?.let { key ->
+            p.options.firstOrNull { it.key == key }?.let { r = p.set(r, it) }
+        }
+        is ToggleParam -> if (o.has(p.key)) r = p.set(r, o.optBoolean(p.key))
+    }
     val mono = o.optJSONArray("mono")?.takeIf { it.length() >= 3 }?.let {
         Triple(it.optDouble(0).toFloat(), it.optDouble(1).toFloat(), it.optDouble(2).toFloat())
     }
@@ -99,31 +141,27 @@ fun recipeFromJson(o: JSONObject): FilmRecipe {
             band to HslAdjust(it.optDouble(0).toFloat(), it.optDouble(1).toFloat(), it.optDouble(2).toFloat())
         }
     }.toMap()
-    return FilmRecipe(
-        id = o.optString("id").ifBlank { newRecipeId() },
-        label = o.optString("label").ifBlank { "RECIPE" },
-        redGain = o.f("redGain", 1f),
-        blueGain = o.f("blueGain", 1f),
-        tint = o.f("tint", 0f),
-        satR = o.f("satR", 1f),
-        satG = o.f("satG", 1f),
-        satB = o.f("satB", 1f),
+    val curvesJson = o.optJSONObject("curves")
+    val curves = CurveChannel.entries.mapNotNull { ch ->
+        curvesJson?.optJSONArray(ch.name)?.takeIf { it.length() == CURVE_POINTS }?.let { a ->
+            ch to List(CURVE_POINTS) { a.optDouble(it).toFloat() }
+        }
+    }.toMap()
+    return r.copy(
         mono = mono,
-        blackPoint = o.f("blackPoint", 0f),
-        shadows = o.f("shadows", 0f),
-        mids = o.f("mids", 0f),
-        highlights = o.f("highlights", 0f),
-        whitePoint = o.f("whitePoint", 1f),
-        shadowTint = tintFromJson(o.optJSONArray("shadowTint")),
-        midTint = tintFromJson(o.optJSONArray("midTint")),
-        highlightTint = tintFromJson(o.optJSONArray("highlightTint")),
-        grain = o.f("grain", 0f),
-        grainSize = o.f("grainSize", 1f),
-        grainColor = o.f("grainColor", 0f),
-        vignette = o.f("vignette", 0f),
-        clarity = o.f("clarity", 0f),
-        colorChrome = o.f("colorChrome", 0f),
-        halation = o.f("halation", 0f),
         hsl = hsl,
+        curves = curves,
+        lutName = o.optString("lutName").ifBlank { null },
+        lutStrength = o.optDouble("lutStrength", 1.0).toFloat(),
+        defaultLensMm = o.optInt("defaultLensMm", 0),
     )
+}
+
+/** Version 1 stored tints as "shadowTint": [r, g, b]. */
+private fun legacyTintComponent(o: JSONObject, key: String): Float? {
+    val dot = key.indexOf('.')
+    if (dot < 0) return null
+    val arr = o.optJSONArray(key.substring(0, dot)) ?: return null
+    val idx = when (key.substring(dot + 1)) { "r" -> 0; "g" -> 1; "b" -> 2; else -> return null }
+    return if (arr.length() > idx) arr.optDouble(idx).toFloat() else null
 }
