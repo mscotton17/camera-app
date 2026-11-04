@@ -397,7 +397,7 @@ private fun Chips(
 }
 
 @Composable
-private fun EditorButton(label: String, highlighted: Boolean = false, onClick: () -> Unit) {
+internal fun EditorButton(label: String, highlighted: Boolean = false, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .padding(start = 6.dp)

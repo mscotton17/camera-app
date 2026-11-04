@@ -625,34 +625,7 @@ fun CameraScreen() {
                     modifier = pm,
                     vertical = vertical
                 )
-                HudItem.RECIPE -> PickerRow(
-                    // Stays open so looks can be compared live; the last entries are actions.
-                    labels = listOf("STD") +
-                        allRecipes.map { if (it.id in library.favorites) "\u2605 ${it.label}" else it.label } +
-                        listOf("\u270E EDIT", "\u2B07 IMPORT", "\u2699 DEVELOP"),
-                    selectedIndex = allRecipes.indexOfFirst { it.id == selectedRecipe?.id } + 1,
-                    onSelect = { i ->
-                        val action = i - allRecipes.size - 1
-                        when {
-                            i == 0 -> recipeId = null
-                            action < 0 -> recipeId = allRecipes[i - 1].id
-                            action == 0 -> {
-                                draft = selectedRecipe ?: FilmRecipe(id = newRecipeId(), label = "MY RECIPE")
-                                openPicker = null
-                            }
-                            action == 1 -> importRecipeLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
-                            else -> {
-                                if (selectedRecipe == null) {
-                                    Toast.makeText(context, "Pick a recipe first, then DEVELOP a DNG or JPEG with it", Toast.LENGTH_LONG).show()
-                                } else {
-                                    developLauncher.launch(arrayOf("image/*"))
-                                }
-                            }
-                        }
-                    },
-                    modifier = pm,
-                    vertical = vertical
-                )
+                HudItem.RECIPE -> Unit // shown as the recipe panel
                 null -> Unit
             }
         }
@@ -807,7 +780,51 @@ fun CameraScreen() {
         val isLandscape =
             LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
         val editing = draft
-        if (editing != null) {
+        val panelModifier = if (isLandscape) {
+            Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .fillMaxWidth(0.5f)
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.End + WindowInsetsSides.Vertical))
+        } else {
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .fillMaxHeight(0.55f)
+                .navigationBarsPadding()
+        }
+        if (recipePickerOpen) {
+            // Recipe chooser in the same place and style as the editor.
+            RecipePanel(
+                recipes = allRecipes,
+                selectedId = selectedRecipe?.id,
+                favorites = library.favorites,
+                customIds = customRecipes.map { it.id }.toSet(),
+                onSelect = { recipeId = it },
+                onToggleFavorite = { id ->
+                    val favs = if (id in library.favorites) library.favorites - id else library.favorites + id
+                    updateLibrary(library.copy(favorites = favs))
+                },
+                onEdit = { r ->
+                    draft = r ?: FilmRecipe(id = newRecipeId(), label = "MY RECIPE")
+                    openPicker = null
+                },
+                onNew = {
+                    draft = FilmRecipe(id = newRecipeId(), label = "MY RECIPE")
+                    openPicker = null
+                },
+                onImport = { importRecipeLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) },
+                onDevelop = {
+                    if (selectedRecipe == null) {
+                        Toast.makeText(context, "Pick a recipe first, then develop a DNG or JPEG with it", Toast.LENGTH_LONG).show()
+                    } else {
+                        developLauncher.launch(arrayOf("image/*"))
+                    }
+                },
+                onClose = { openPicker = null },
+                modifier = panelModifier
+            )
+        } else if (editing != null) {
             // Recipe editor over the lower half (portrait) or right half (landscape); the live
             // preview stays visible above / beside it.
             RecipeEditor(
@@ -859,9 +876,6 @@ fun CameraScreen() {
                     .padding(end = 24.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (recipePickerOpen) {
-                    pickerContent(Modifier.padding(end = 10.dp).heightIn(max = 320.dp), true)
-                }
                 Column(
                     verticalArrangement = Arrangement.spacedBy(40.dp, Alignment.CenterVertically),
                     horizontalAlignment = Alignment.CenterHorizontally
@@ -882,9 +896,6 @@ fun CameraScreen() {
                     .padding(bottom = 32.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                if (recipePickerOpen) {
-                    pickerContent(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 16.dp), false)
-                }
                 Box(modifier = Modifier.fillMaxWidth()) {
                     recipeButton(Modifier.align(Alignment.CenterStart).padding(start = 20.dp))
                     shutterButton(Modifier.align(Alignment.Center))
