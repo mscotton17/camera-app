@@ -62,7 +62,7 @@ private val ControlBackground = Color.Black.copy(alpha = 0.4f)
 private val ControlBorder = Color.White.copy(alpha = 0.8f)
 
 /** Lightning bolt (same geometry as Material's flash_on), kept local to avoid the extended icon set. */
-private val FlashBolt: ImageVector = materialIcon(name = "FlashBolt") {
+internal val FlashBolt: ImageVector = materialIcon(name = "FlashBolt") {
     materialPath {
         moveTo(7f, 2f)
         verticalLineToRelative(11f)

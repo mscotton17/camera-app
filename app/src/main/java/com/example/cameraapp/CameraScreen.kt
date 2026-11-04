@@ -26,6 +26,10 @@ import androidx.compose.animation.core.LinearEasing
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.background
+import kotlinx.coroutines.Job
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -148,6 +152,14 @@ fun CameraScreen() {
     val uiScope = rememberCoroutineScope()
     val exposureSweep = remember { Animatable(0f) }
     var exposureRunning by remember { mutableStateOf(false) }
+    // UI: settings page values, PHOTO/PRO mode, the ☰ menu and the self-timer.
+    val settings = remember { AppSettings(context) }
+    var proMode by rememberSaveable { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
+    var timerSec by rememberSaveable { mutableIntStateOf(0) }
+    var countdown by remember { mutableIntStateOf(0) }
+    var countdownJob by remember { mutableStateOf<Job?>(null) }
+    val countdownSweep = remember { Animatable(0f) }
     val hud by telemetry.state
 
     // Selected lens (default: the main back lens) and the format it can actually shoot.
@@ -537,41 +549,27 @@ fun CameraScreen() {
             )
         }
 
+        val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
         val facingLenses = lens?.let { l -> lensSet?.forFacing(l.facing) }.orEmpty()
-        val canPickLens = facingLenses.size > 1
 
         val caps = lens?.exposure
         val shutterOptions = caps?.shutterOptions().orEmpty()
         val isoOptions = caps?.isoOptions().orEmpty()
         val pickable = buildSet {
-            if (canPickLens) add(HudItem.FOCAL)
             if (caps?.manualSensor == true && shutterOptions.isNotEmpty()) add(HudItem.SHUTTER)
             if (caps?.manualSensor == true && isoOptions.isNotEmpty()) add(HudItem.ISO)
             if (caps?.variableAperture == true) add(HudItem.APERTURE)
-            // Compensation needs something metering: hidden in full manual.
-            if (!(resolvedExposure.shutterLocked && resolvedExposure.isoLocked)) add(HudItem.EV)
+            // Compensation needs something metering: unavailable in full manual.
+            if (!fullManual) add(HudItem.EV)
             add(HudItem.RECIPE)
         }
         val shownPicker = openPicker?.takeIf { it in pickable }
+        // PRO-mode picker for the tapped exposure value.
+        val proPickerOpen = proMode && draft == null && shownPicker != null && shownPicker != HudItem.RECIPE
 
-        val hudLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-        // The picker for the tapped value: a row under the top bar in portrait, a column beside
-        // the side bar in landscape.
         val pickerContent: @Composable (Modifier, Boolean) -> Unit = { pm, vertical ->
             when (shownPicker) {
-                HudItem.FOCAL -> Box(
-                    Modifier.then(if (vertical) Modifier else Modifier.fillMaxWidth()),
-                    contentAlignment = if (vertical) Alignment.TopStart else Alignment.TopEnd
-                ) { PickerRow(
-                    labels = facingLenses.map { "${it.equivFocalMm ?: "?"} mm" },
-                    selectedIndex = facingLenses.indexOfFirst { it.key == lens?.key },
-                    onSelect = { i ->
-                        if (!capturing) selectedLensKey = facingLenses[i].key
-                        openPicker = null
-                    },
-                    modifier = pm,
-                    vertical = vertical
-                ) }
+                HudItem.FOCAL -> Unit // lenses are the buttons on the image
                 HudItem.SHUTTER -> PickerRow(
                     labels = listOf("AUTO") + shutterOptions.map { formatShutter(it) },
                     selectedIndex = if (exposure.shutterLocked) {
@@ -629,30 +627,6 @@ fun CameraScreen() {
                 null -> Unit
             }
         }
-        // Flash, format, EV and recipe buttons.
-        val toggleButtons: @Composable () -> Unit = {
-                if (!resolvedExposure.manualSensor && bound?.camera?.cameraInfo?.hasFlashUnit() == true) {
-                    FlashButton(setting = flash, onClick = { flash = flash.next() })
-                }
-                if (lens != null && ImageCapture.OUTPUT_FORMAT_RAW in lens.supportedFormats) {
-                    FormatButton(
-                        format = activeFormat,
-                        onClick = {
-                            var next = activeFormat.nextFor(lens)
-                            // RAW alone can't carry a recipe, so skip it while one is on.
-                            if (recipe != null && next == CaptureFormat.RAW) next = next.nextFor(lens)
-                            format = next
-                        }
-                    )
-                }
-                if (HudItem.EV in pickable) {
-                    EvButton(
-                        ev = evComp,
-                        open = shownPicker == HudItem.EV,
-                        onClick = { openPicker = if (shownPicker == HudItem.EV) null else HudItem.EV }
-                    )
-                }
-        }
         // Film recipe button: beside the shutter (left of it in portrait, under it in
         // landscape), with its picker opening next to it.
         val recipeButton: @Composable (Modifier) -> Unit = { m ->
@@ -664,76 +638,123 @@ fun CameraScreen() {
             )
         }
         val recipePickerOpen = draft == null && shownPicker == HudItem.RECIPE
-        val hudBar: @Composable (Modifier, Boolean) -> Unit = { m, vertical ->
-            TelemetryHud(
-                telemetry = hud,
-                settings = resolvedExposure,
-                lensFocalMm = lens?.equivFocalMm,
-                pickable = pickable,
-                openItem = shownPicker,
-                onItemClick = { openPicker = if (shownPicker == it) null else it },
-                vertical = vertical,
-                modifier = m
+        // PRO mode: ISO, shutter, EV and aperture, each marked "A" while automatic.
+        val proCells = listOf(
+            ProCell(HudItem.ISO, (resolvedExposure.iso ?: hud.iso)?.toString() ?: "--", "ISO", !resolvedExposure.isoLocked, HudItem.ISO in pickable),
+            ProCell(HudItem.SHUTTER, formatShutter(resolvedExposure.shutterNs ?: hud.exposureTimeNs), "SHUTTER", !resolvedExposure.shutterLocked, HudItem.SHUTTER in pickable),
+            ProCell(HudItem.EV, formatEv(evComp), "EV", false, HudItem.EV in pickable),
+            ProCell(
+                HudItem.APERTURE, formatAperture(resolvedExposure.aperture ?: hud.apertureF), "APERTURE",
+                caps?.variableAperture == true && resolvedExposure.aperture == null, HudItem.APERTURE in pickable
+            ),
+        )
+        val onProCell: (HudItem) -> Unit = { openPicker = if (shownPicker == it) null else it }
+        // Leaving PRO puts exposure back to fully automatic.
+        val setMode: (Boolean) -> Unit = { pro ->
+            proMode = pro
+            openPicker = null
+            if (!pro) exposure = ExposureSettings()
+        }
+        val flashAvailable = !resolvedExposure.manualSensor && bound?.camera?.cameraInfo?.hasFlashUnit() == true
+        val formatAvailable = lens != null && ImageCapture.OUTPUT_FORMAT_RAW in lens.supportedFormats
+        val cycleFormat: () -> Unit = cycle@{
+            val l = lens ?: return@cycle
+            var next = activeFormat.nextFor(l)
+            // RAW alone can't carry a recipe, so skip it while one is on.
+            if (recipe != null && next == CaptureFormat.RAW) next = next.nextFor(l)
+            format = next
+        }
+        val topBar: @Composable (Modifier, Boolean) -> Unit = { m, compact ->
+            TopIconBar(
+                flash = flash,
+                flashAvailable = flashAvailable,
+                onFlash = { flash = flash.next() },
+                format = activeFormat,
+                formatAvailable = formatAvailable,
+                onFormat = cycleFormat,
+                timerSeconds = timerSec,
+                onMenu = { menuOpen = !menuOpen },
+                menuOpen = menuOpen,
+                modifier = m,
+                compact = compact
             )
         }
 
-        if (hudLandscape) {
-            // Landscape: exposure values and buttons stacked in the left bar, clear of the image,
-            // mirroring the shutter column on the right.
+        // Controls anchored to the image itself: grid, countdown, lens buttons, PRO strip.
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val density = LocalDensity.current
+            val full = previewImageRect(androidx.compose.ui.geometry.Size(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat()))
+            val frame = previewCropRect(full, recipe?.aspect ?: AspectRatio.NATIVE)
+            Box(
+                Modifier
+                    .offset { IntOffset(frame.left.roundToInt(), frame.top.roundToInt()) }
+                    .size(with(density) { frame.width.toDp() }, with(density) { frame.height.toDp() })
+            ) {
+                if (settings.gridOn) GridOverlay(Modifier.fillMaxSize())
+                if (countdown > 0) CountdownOverlay(countdown, Modifier.fillMaxSize())
+                if (draft == null) {
+                    Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                        if (proPickerOpen && !isLandscape) {
+                            pickerContent(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), false)
+                        }
+                        if (facingLenses.size > 1) {
+                            LensPills(
+                                lenses = facingLenses,
+                                selectedKey = lens?.key,
+                                onSelect = { if (!capturing) selectedLensKey = it.key },
+                                modifier = Modifier.padding(bottom = 10.dp)
+                            )
+                        }
+                        if (proMode && !isLandscape) ProStrip(proCells, shownPicker, onProCell, vertical = false)
+                    }
+                }
+            }
+        }
+
+        if (isLandscape) {
+            // Landscape: icons, mode and (in PRO) the exposure column in the left bar.
             Row(
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .fillMaxHeight()
                     .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start + WindowInsetsSides.Vertical))
-                    .padding(start = 12.dp, top = 8.dp, bottom = 8.dp),
+                    .padding(start = 8.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(
                     modifier = Modifier.verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    hudBar(Modifier, true)
-                    if (draft == null) {
-                        Spacer(Modifier.height(4.dp))
-                        toggleButtons()
-                    }
+                    topBar(Modifier, true)
+                    if (draft == null) ModeToggle(proMode, setMode)
+                    if (proMode) ProStrip(proCells, shownPicker, onProCell, vertical = true)
                 }
-                if (draft == null && shownPicker != null && shownPicker != HudItem.RECIPE) {
-                    pickerContent(Modifier.padding(start = 10.dp).heightIn(max = 320.dp), true)
-                }
+                if (proPickerOpen) pickerContent(Modifier.padding(start = 10.dp).heightIn(max = 320.dp), true)
             }
         } else {
-            // Portrait: exposure bar across the top, its picker, then the buttons.
-            Column(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
-                hudBar(Modifier, false)
-                if (draft == null && shownPicker != HudItem.RECIPE) {
-                    pickerContent(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp), false)
-                }
-                if (draft == null) FlowRow(
-                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    toggleButtons()
-                }
-            }
+            // Portrait: icon bar across the top.
+            topBar(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 20.dp, vertical = 4.dp),
+                false
+            )
         }
 
-        val shutterButton: @Composable (Modifier) -> Unit = { m ->
-            ShutterButton(
-                enabled = !capturing && bound != null,
-                busy = capturing,
-                exposureProgress = if (exposureRunning) exposureSweep.value else null,
-                onClick = {
-                    val b = bound ?: return@ShutterButton
+        val capture: () -> Unit = capture@{
+                    val b = bound ?: return@capture
                     capturing = true
                     // Feel: open click now, close tick after the exposure time; long exposures
                     // also sweep the ring for their duration before the processing spinner.
                     val exposureMs = ((resolvedExposure.shutterNs ?: telemetry.latest.exposureTimeNs ?: 0L) / 1_000_000L)
-                    haptics.tick(opening = true)
-                    uiScope.launch {
-                        delay(max(exposureMs, ShutterHaptics.MIN_GAP_MS))
-                        haptics.tick(opening = false)
+                    if (settings.hapticsOn) {
+                        haptics.tick(opening = true)
+                        uiScope.launch {
+                            delay(max(exposureMs, ShutterHaptics.MIN_GAP_MS))
+                            haptics.tick(opening = false)
+                        }
                     }
                     if (exposureMs >= 100L) {
                         uiScope.launch {
@@ -752,6 +773,41 @@ fun CameraScreen() {
                         recipe = renderRecipe,
                         ioExecutor = ioExecutor
                     ) { capturing = false }
+        }
+        val shutterButton: @Composable (Modifier) -> Unit = { m ->
+            ShutterButton(
+                // Stays tappable during a self-timer countdown, to cancel it.
+                enabled = (!capturing && bound != null) || countdown > 0,
+                busy = capturing,
+                exposureProgress = when {
+                    countdown > 0 -> countdownSweep.value
+                    exposureRunning -> exposureSweep.value
+                    else -> null
+                },
+                onClick = {
+                    val job = countdownJob
+                    when {
+                        job != null -> {
+                            job.cancel()
+                            countdownJob = null
+                            countdown = 0
+                        }
+                        timerSec > 0 -> countdownJob = uiScope.launch {
+                            launch {
+                                countdownSweep.snapTo(0f)
+                                countdownSweep.animateTo(1f, tween(timerSec * 1000, easing = LinearEasing))
+                            }
+                            for (sec in timerSec downTo 1) {
+                                countdown = sec
+                                if (settings.hapticsOn) haptics.tick(opening = false)
+                                delay(1000)
+                            }
+                            countdown = 0
+                            countdownJob = null
+                            capture()
+                        }
+                        else -> capture()
+                    }
                 },
                 modifier = m
             )
@@ -777,8 +833,6 @@ fun CameraScreen() {
             }
         }
 
-        val isLandscape =
-            LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
         val editing = draft
         val panelModifier = if (isLandscape) {
             Modifier
@@ -896,12 +950,61 @@ fun CameraScreen() {
                     .padding(bottom = 32.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                ModeToggle(proMode, setMode, Modifier.padding(bottom = 14.dp))
                 Box(modifier = Modifier.fillMaxWidth()) {
                     recipeButton(Modifier.align(Alignment.CenterStart).padding(start = 20.dp))
                     shutterButton(Modifier.align(Alignment.Center))
                     switchButton(Modifier.align(Alignment.CenterEnd).padding(end = 40.dp))
                 }
             }
+        }
+
+        // ☰ menu: drops from the top over everything else.
+        if (menuOpen) {
+            Scrim { menuOpen = false }
+            MenuSheet(
+                formats = listOf(CaptureFormat.JPEG, CaptureFormat.RAW, CaptureFormat.RAW_JPEG)
+                    .filter { it.outputFormat in lens?.supportedFormats.orEmpty() },
+                format = activeFormat,
+                // A recipe needs a JPEG to bake into, so RAW alone is off while one is on.
+                disabledFormats = if (recipe != null) setOf(CaptureFormat.RAW) else emptySet(),
+                onFormat = { format = it },
+                flash = flash,
+                flashNote = when {
+                    bound?.camera?.cameraInfo?.hasFlashUnit() != true -> "This lens has no flash"
+                    resolvedExposure.manualSensor -> "Flash is off while shutter or ISO is manual"
+                    else -> null
+                },
+                onFlash = { flash = it },
+                timerSeconds = timerSec,
+                onTimer = { timerSec = it },
+                ev = evComp,
+                evAvailable = !fullManual,
+                onEv = { evComp = it },
+                tiles = listOf(
+                    MenuTile("\u270E", "Recipe editor") {
+                        menuOpen = false
+                        openPicker = null
+                        draft = selectedRecipe ?: FilmRecipe(id = newRecipeId(), label = "MY RECIPE")
+                    },
+                    MenuTile("\u2B07", "Import recipe") {
+                        importRecipeLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                    },
+                    MenuTile("\u25D1", "Develop photo") {
+                        if (selectedRecipe == null) {
+                            Toast.makeText(context, "Pick a recipe first, then develop a DNG or JPEG with it", Toast.LENGTH_LONG).show()
+                        } else {
+                            developLauncher.launch(arrayOf("image/*"))
+                        }
+                    },
+                ),
+                settings = settings,
+                onClose = { menuOpen = false },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .then(if (isLandscape) Modifier.fillMaxWidth(0.6f) else Modifier.fillMaxWidth())
+                    .statusBarsPadding()
+            )
         }
     }
 }
