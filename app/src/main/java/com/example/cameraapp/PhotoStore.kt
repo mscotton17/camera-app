@@ -35,6 +35,7 @@ fun takePhoto(
     format: CaptureFormat,
     mirror: Boolean,
     telemetry: CameraTelemetry,
+    recipe: FilmRecipe?,
     ioExecutor: Executor,
     onDone: () -> Unit
 ) {
@@ -68,6 +69,14 @@ fun takePhoto(
         override fun onImageSaved(output: ImageCapture.OutputFileResults) {
             val uri = output.savedUri
             if (uri != null && output.imageFormat != ImageFormat.RAW_SENSOR) {
+                // Film recipes apply to the JPEG only; a DNG stays untouched sensor data.
+                if (recipe != null) {
+                    try {
+                        applyRecipeToJpeg(context, uri, recipe)
+                    } catch (e: Throwable) {
+                        Log.e(TAG, "Applying ${recipe.label} failed; keeping the original JPEG", e)
+                    }
+                }
                 try {
                     writeExifIfMissing(context, uri, telemetry)
                 } catch (e: Exception) {

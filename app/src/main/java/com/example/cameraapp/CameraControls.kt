@@ -214,3 +214,25 @@ fun EvButton(ev: Float, open: Boolean, onClick: () -> Unit, modifier: Modifier =
         )
     }
 }
+
+/** Film recipe pill: "STD" when off, otherwise the recipe name in amber. */
+@Composable
+fun RecipeButton(recipe: FilmRecipe?, open: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val label = recipe?.label ?: "STD"
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (open) HudAmber.copy(alpha = 0.25f) else ControlBackground)
+            .border(1.dp, ControlBorder.copy(alpha = 0.5f), RoundedCornerShape(50))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 7.dp)
+            .semantics { contentDescription = "Film recipe $label" }
+    ) {
+        Text(
+            text = label,
+            color = if (recipe != null) HudAmber else Color.White,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp
+        )
+    }
+}

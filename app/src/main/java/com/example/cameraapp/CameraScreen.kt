@@ -3,6 +3,7 @@ package com.example.cameraapp
 import android.content.Context
 import android.content.res.Configuration
 import android.hardware.display.DisplayManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -25,6 +26,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -56,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -97,6 +101,7 @@ private class BoundCamera(
     val format: CaptureFormat,
 )
 
+@OptIn(ExperimentalLayoutApi::class) // FlowRow
 @Composable
 fun CameraScreen() {
     val context = LocalContext.current
@@ -136,8 +141,36 @@ fun CameraScreen() {
         set.byKey(selectedLensKey) ?: set.defaultFor(CameraSelector.LENS_FACING_BACK)
             ?: set.lenses.firstOrNull()
     }
-    val activeFormat =
+    // Film recipe (null = standard). Kept while the app runs.
+    var recipeId by rememberSaveable { mutableStateOf<String?>(null) }
+    val recipe = FilmRecipes.firstOrNull { it.id == recipeId }
+
+    val baseFormat =
         if (lens != null && format.outputFormat in lens.supportedFormats) format else CaptureFormat.JPEG
+    // A recipe can't be baked into a DNG, so like a film-simulation camera, RAW becomes
+    // RAW+JPG while a recipe is on: the DNG stays clean and the JPEG gets the look.
+    val activeFormat =
+        if (recipe != null && baseFormat == CaptureFormat.RAW &&
+            CaptureFormat.RAW_JPEG.outputFormat in lens?.supportedFormats.orEmpty()
+        ) {
+            CaptureFormat.RAW_JPEG
+        } else {
+            baseFormat
+        }
+
+    // Live film preview: GPU shader on Android 13+, colour matrix only on Android 12.
+    val filmShader = remember(recipe) {
+        if (recipe != null && Build.VERSION.SDK_INT >= 33) FilmPreviewShader(recipe) else null
+    }
+    var grainSeed by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(filmShader) {
+        // Re-seed the grain ~12 times a second so it moves like film rather than sitting on the glass.
+        if (filmShader == null || (recipe?.grain ?: 0f) <= 0f) return@LaunchedEffect
+        while (isActive) {
+            delay(83)
+            grainSeed = (grainSeed + 1.618f) % 1000f
+        }
+    }
 
     LaunchedEffect(Unit) {
         val p = ProcessCameraProvider.awaitInstance(context)
@@ -259,7 +292,20 @@ fun CameraScreen() {
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
+        AndroidView(
+            factory = { previewView },
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    // Reading grainSeed here only redraws this layer, not the whole screen.
+                    renderEffect = when {
+                        filmShader != null -> filmShader.effect(grainSeed).asComposeRenderEffect()
+                        recipe != null && Build.VERSION.SDK_INT >= 31 ->
+                            filmColorFilterEffect(recipe).asComposeRenderEffect()
+                        else -> null
+                    }
+                }
+        )
 
         // Gesture layer over the preview: tap to focus/meter.
         Box(
@@ -313,6 +359,7 @@ fun CameraScreen() {
             if (caps?.variableAperture == true) add(HudItem.APERTURE)
             // Compensation needs something metering: hidden in full manual.
             if (!(resolvedExposure.shutterLocked && resolvedExposure.isoLocked)) add(HudItem.EV)
+            add(HudItem.RECIPE)
         }
         val shownPicker = openPicker?.takeIf { it in pickable }
 
@@ -386,17 +433,33 @@ fun CameraScreen() {
                     onSelect = { i -> evComp = EvOptions[i] },
                     modifier = pickerModifier
                 )
+                HudItem.RECIPE -> PickerRow(
+                    // Stays open so looks can be compared live.
+                    labels = listOf("STD") + FilmRecipes.map { it.label },
+                    selectedIndex = FilmRecipes.indexOf(recipe) + 1,
+                    onSelect = { i -> recipeId = if (i == 0) null else FilmRecipes[i - 1].id },
+                    modifier = pickerModifier
+                )
                 null -> Unit
             }
-            Row(
-                modifier = Modifier.padding(start = 12.dp, top = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            FlowRow(
+                modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (!resolvedExposure.manualSensor && bound?.camera?.cameraInfo?.hasFlashUnit() == true) {
                     FlashButton(setting = flash, onClick = { flash = flash.next() })
                 }
                 if (lens != null && ImageCapture.OUTPUT_FORMAT_RAW in lens.supportedFormats) {
-                    FormatButton(format = activeFormat, onClick = { format = activeFormat.nextFor(lens) })
+                    FormatButton(
+                        format = activeFormat,
+                        onClick = {
+                            var next = activeFormat.nextFor(lens)
+                            // RAW alone can't carry a recipe, so skip it while one is on.
+                            if (recipe != null && next == CaptureFormat.RAW) next = next.nextFor(lens)
+                            format = next
+                        }
+                    )
                 }
                 if (HudItem.EV in pickable) {
                     EvButton(
@@ -405,6 +468,11 @@ fun CameraScreen() {
                         onClick = { openPicker = if (shownPicker == HudItem.EV) null else HudItem.EV }
                     )
                 }
+                RecipeButton(
+                    recipe = recipe,
+                    open = shownPicker == HudItem.RECIPE,
+                    onClick = { openPicker = if (shownPicker == HudItem.RECIPE) null else HudItem.RECIPE }
+                )
             }
         }
 
@@ -420,6 +488,7 @@ fun CameraScreen() {
                         format = b.format,
                         mirror = lens?.facing == CameraSelector.LENS_FACING_FRONT,
                         telemetry = telemetry.latest,
+                        recipe = recipe,
                         ioExecutor = ioExecutor
                     ) { capturing = false }
                 },

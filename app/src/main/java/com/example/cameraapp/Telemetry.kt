@@ -147,8 +147,8 @@ fun Preview.Builder.attachTelemetry(tracker: TelemetryTracker): Preview.Builder 
     return this
 }
 
-/** Adjustable values; EV lives in the toggle row rather than the bar itself. */
-enum class HudItem { APERTURE, SHUTTER, ISO, FOCAL, EV }
+/** Adjustable values; EV and the film recipe live in the toggle row rather than the bar itself. */
+enum class HudItem { APERTURE, SHUTTER, ISO, FOCAL, EV, RECIPE }
 
 /**
  * Retro mirrorless-style OSD bar: f/1.8  |  1/250s  |  ISO 100  |  24mm (35mm equivalent).
