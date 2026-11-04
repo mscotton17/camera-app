@@ -117,7 +117,10 @@ fun CameraScreen() {
     var flash by rememberSaveable { mutableStateOf(FlashSetting.AUTO) }
     var bound by remember { mutableStateOf<BoundCamera?>(null) }
     var capturing by remember { mutableStateOf(false) }
-    var lensPickerOpen by remember { mutableStateOf(false) }
+    // Which HUD item's picker is open (lens, shutter, ISO, f-stop), if any.
+    var openPicker by remember { mutableStateOf<HudItem?>(null) }
+    // Not saved: exposure is automatic every time the app opens.
+    var exposure by remember { mutableStateOf(ExposureSettings()) }
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
     var focusKey by remember { mutableIntStateOf(0) }
     val focusScale = remember { Animatable(1f) }
@@ -158,7 +161,15 @@ fun CameraScreen() {
         onDispose { displayManager.unregisterDisplayListener(listener) }
     }
 
-    LaunchedEffect(flash, bound) { bound?.imageCapture?.flashMode = flash.mode }
+    // Exposure overrides limited to what the current lens supports.
+    val resolvedExposure = lens?.let { exposure.resolvedFor(it.exposure) } ?: ExposureSettings()
+    LaunchedEffect(bound, resolvedExposure) { bound?.camera?.let { applyExposure(it, resolvedExposure) } }
+
+    // Flash relies on auto-exposure, so it's off while shutter/ISO are manual.
+    LaunchedEffect(flash, bound, resolvedExposure.manualSensor) {
+        bound?.imageCapture?.flashMode =
+            if (resolvedExposure.manualSensor) ImageCapture.FLASH_MODE_OFF else flash.mode
+    }
 
     // Focus ring: pop in, settle, then fade away.
     LaunchedEffect(focusKey) {
@@ -265,33 +276,88 @@ fun CameraScreen() {
         val facingLenses = lens?.let { l -> lensSet?.forFacing(l.facing) }.orEmpty()
         val canPickLens = facingLenses.size > 1
 
-        // Top: exposure OSD (tap the focal length to pick a lens), then flash/format toggles.
+        val caps = lens?.exposure
+        val shutterOptions = caps?.shutterOptions().orEmpty()
+        val isoOptions = caps?.isoOptions().orEmpty()
+        val pickable = buildSet {
+            if (canPickLens) add(HudItem.FOCAL)
+            if (caps?.manualSensor == true && shutterOptions.isNotEmpty()) add(HudItem.SHUTTER)
+            if (caps?.manualSensor == true && isoOptions.isNotEmpty()) add(HudItem.ISO)
+            if (caps?.variableAperture == true) add(HudItem.APERTURE)
+        }
+        val shownPicker = openPicker?.takeIf { it in pickable }
+
+        // Top: exposure OSD (tap a value to change it), its picker, then flash/format toggles.
         Column(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
             TelemetryHud(
                 telemetry = hud,
+                settings = resolvedExposure,
                 lensFocalMm = lens?.equivFocalMm,
-                focalPickable = canPickLens,
-                focalOpen = lensPickerOpen && canPickLens,
-                onFocalClick = { lensPickerOpen = !lensPickerOpen }
+                pickable = pickable,
+                openItem = shownPicker,
+                onItemClick = { openPicker = if (shownPicker == it) null else it }
             )
-            if (lensPickerOpen && canPickLens) {
-                LensOptions(
-                    lenses = facingLenses,
-                    selectedKey = lens?.key,
-                    onSelect = {
-                        if (!capturing) selectedLensKey = it.key
-                        lensPickerOpen = false
+            val pickerModifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp)
+            when (shownPicker) {
+                HudItem.FOCAL -> PickerRow(
+                    labels = facingLenses.map { "${it.equivFocalMm ?: "?"} mm" },
+                    selectedIndex = facingLenses.indexOfFirst { it.key == lens?.key },
+                    onSelect = { i ->
+                        if (!capturing) selectedLensKey = facingLenses[i].key
+                        openPicker = null
                     },
-                    modifier = Modifier
-                        .align(Alignment.End)
-                        .padding(end = 12.dp, top = 8.dp)
+                    modifier = pickerModifier.align(Alignment.End)
                 )
+                HudItem.SHUTTER -> PickerRow(
+                    labels = listOf("AUTO") + shutterOptions.map { formatShutter(it) },
+                    selectedIndex = if (exposure.shutterLocked) {
+                        shutterOptions.indexOf(resolvedExposure.shutterNs) + 1
+                    } else {
+                        0
+                    },
+                    onSelect = { i ->
+                        if (caps != null) {
+                            exposure = if (i == 0) {
+                                exposure.autoSensor()
+                            } else {
+                                exposure.withShutter(shutterOptions[i - 1], telemetry.latest, caps)
+                            }
+                        }
+                    },
+                    modifier = pickerModifier
+                )
+                HudItem.ISO -> PickerRow(
+                    labels = listOf("AUTO") + isoOptions.map { "ISO $it" },
+                    selectedIndex = if (exposure.isoLocked) isoOptions.indexOf(resolvedExposure.iso) + 1 else 0,
+                    onSelect = { i ->
+                        if (caps != null) {
+                            exposure = if (i == 0) {
+                                exposure.autoSensor()
+                            } else {
+                                exposure.withIso(isoOptions[i - 1], telemetry.latest, caps)
+                            }
+                        }
+                    },
+                    modifier = pickerModifier
+                )
+                HudItem.APERTURE -> {
+                    val apertures = caps?.apertures.orEmpty()
+                    PickerRow(
+                        labels = listOf("AUTO") + apertures.map { formatAperture(it) },
+                        selectedIndex = apertures.indexOf(resolvedExposure.aperture) + 1,
+                        onSelect = { i ->
+                            exposure = exposure.copy(aperture = if (i == 0) null else apertures[i - 1])
+                        },
+                        modifier = pickerModifier
+                    )
+                }
+                null -> Unit
             }
             Row(
                 modifier = Modifier.padding(start = 12.dp, top = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (bound?.camera?.cameraInfo?.hasFlashUnit() == true) {
+                if (!resolvedExposure.manualSensor && bound?.camera?.cameraInfo?.hasFlashUnit() == true) {
                     FlashButton(setting = flash, onClick = { flash = flash.next() })
                 }
                 if (lens != null && ImageCapture.OUTPUT_FORMAT_RAW in lens.supportedFormats) {
@@ -330,7 +396,7 @@ fun CameraScreen() {
                             CameraSelector.LENS_FACING_BACK
                         }
                         selectedLensKey = set.defaultFor(other)?.key
-                        lensPickerOpen = false
+                        openPicker = null
                     },
                     modifier = m
                 )

@@ -6,6 +6,7 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.os.Build
 import android.util.Log
+import android.util.Range
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.core.CameraInfo
@@ -39,7 +40,33 @@ data class Lens(
     val cropFactor: Float?,
     /** ImageCapture.OUTPUT_FORMAT_* values this lens can capture. */
     val supportedFormats: Set<Int>,
+    val exposure: ExposureCaps,
 )
+
+/** What manual exposure control a lens allows. */
+data class ExposureCaps(
+    /** Shutter speed and ISO can be set manually (Camera2 MANUAL_SENSOR). */
+    val manualSensor: Boolean,
+    val exposureRangeNs: Range<Long>?,
+    val isoRange: Range<Int>?,
+    /** f-stops the lens can use; phone lenses almost always have exactly one. */
+    val apertures: List<Float>,
+) {
+    val variableAperture: Boolean get() = apertures.size > 1
+}
+
+/** Ranges come from the lens itself; manual control is decided by the camera we send requests to. */
+private fun exposureCaps(lensChars: CameraCharacteristics, cameraChars: CameraCharacteristics) =
+    ExposureCaps(
+        manualSensor = cameraChars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+            ?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) == true,
+        exposureRangeNs = lensChars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+            ?: cameraChars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE),
+        isoRange = lensChars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+            ?: cameraChars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE),
+        apertures = lensChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
+            ?.toList()?.distinct()?.sorted().orEmpty(),
+    )
 
 data class LensSet(val lenses: List<Lens>, private val defaults: Map<Int, String>) {
     fun forFacing(facing: Int): List<Lens> = lenses.filter { it.facing == facing }
@@ -98,7 +125,10 @@ fun enumerateLenses(context: Context, provider: ProcessCameraProvider): LensSet 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) chars.physicalCameraIds else emptySet()
             if (physicalIds.size < 2) {
                 val crop = chars.cropFactor()
-                found += Lens(logicalId, info, null, facing, chars.equivFocalMm(crop), chars.focalMm(), crop, formats)
+                found += Lens(
+                    logicalId, info, null, facing, chars.equivFocalMm(crop), chars.focalMm(), crop,
+                    formats, exposureCaps(chars, chars)
+                )
                 continue
             }
 
@@ -122,6 +152,7 @@ fun enumerateLenses(context: Context, provider: ProcessCameraProvider): LensSet 
                     focalMm = pc.focalMm(),
                     cropFactor = crop,
                     supportedFormats = if (isMain || pc.hasRaw()) formats else formats - RawFormats,
+                    exposure = exposureCaps(if (isMain) chars else pc, chars),
                 )
             }
         } catch (e: Exception) {

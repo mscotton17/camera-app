@@ -12,6 +12,7 @@ import android.os.SystemClock
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.core.Preview
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.draw.clip
@@ -146,27 +147,40 @@ fun Preview.Builder.attachTelemetry(tracker: TelemetryTracker): Preview.Builder 
     return this
 }
 
+enum class HudItem { APERTURE, SHUTTER, ISO, FOCAL }
+
 /**
  * Retro mirrorless-style OSD bar: f/1.8  |  1/250s  |  ISO 100  |  24mm (35mm equivalent).
- * When [focalPickable], the focal length is a button (marked with a caret) that toggles the
- * lens picker via [onFocalClick].
+ * Items in [pickable] are outlined buttons that call [onItemClick]; [openItem] is highlighted.
+ * Values fixed by the user (or held because of a manual setting) are drawn in white.
  */
 @Composable
 fun TelemetryHud(
     telemetry: CameraTelemetry,
     modifier: Modifier = Modifier,
+    settings: ExposureSettings = ExposureSettings(),
     lensFocalMm: Int? = null,
-    focalPickable: Boolean = false,
-    focalOpen: Boolean = false,
-    onFocalClick: () -> Unit = {},
+    pickable: Set<HudItem> = emptySet(),
+    openItem: HudItem? = null,
+    onItemClick: (HudItem) -> Unit = {},
 ) {
-    val values = listOf(
-        formatAperture(telemetry.apertureF),
-        formatShutter(telemetry.exposureTimeNs),
-        formatIso(telemetry.iso),
+    val shutterNs = settings.shutterNs
+    val iso = settings.iso
+    val items = listOf(
+        Triple(HudItem.APERTURE, formatAperture(settings.aperture ?: telemetry.apertureF), settings.aperture != null),
+        Triple(
+            HudItem.SHUTTER,
+            formatShutter(shutterNs ?: telemetry.exposureTimeNs),
+            shutterNs != null
+        ),
+        Triple(HudItem.ISO, formatIso(iso ?: telemetry.iso), iso != null),
         // The selected lens's focal length so it matches the picker; otherwise live values.
-        lensFocalMm?.let { "${it}mm" }
-            ?: formatFocalLength(telemetry.focalLength35mm ?: telemetry.focalLengthMm),
+        Triple(
+            HudItem.FOCAL,
+            lensFocalMm?.let { "${it}mm" }
+                ?: formatFocalLength(telemetry.focalLength35mm ?: telemetry.focalLengthMm),
+            false
+        ),
     )
     Box(
         modifier = modifier
@@ -177,11 +191,11 @@ fun TelemetryHud(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 4.dp),
+                .padding(horizontal = 8.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            values.forEachIndexed { i, text ->
+            items.forEachIndexed { i, (item, text, fixed) ->
                 if (i > 0) {
                     Box(
                         Modifier
@@ -190,20 +204,23 @@ fun TelemetryHud(
                             .background(HudAmber.copy(alpha = 0.4f))
                     )
                 }
-                val isFocal = i == values.lastIndex
-                if (isFocal && focalPickable) {
+                val color = if (fixed) Color.White else HudAmber
+                if (item in pickable) {
+                    val open = item == openItem
+                    val shape = RoundedCornerShape(50)
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(if (focalOpen) HudAmber.copy(alpha = 0.25f) else Color.Transparent)
-                            .clickable(onClick = onFocalClick)
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                            .semantics { contentDescription = "Lens $text, tap to change" }
+                            .clip(shape)
+                            .background(if (open) HudAmber.copy(alpha = 0.25f) else Color.Transparent)
+                            .border(1.dp, HudAmber.copy(alpha = if (open) 0f else 0.35f), shape)
+                            .clickable { onItemClick(item) }
+                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                            .semantics { contentDescription = "$text, tap to change" }
                     ) {
-                        HudText(text + if (focalOpen) " \u25B4" else " \u25BE")
+                        HudText(text, color = color)
                     }
                 } else {
-                    HudText(text, Modifier.padding(vertical = 4.dp))
+                    HudText(text, Modifier.padding(vertical = 5.dp), color = color)
                 }
             }
         }
@@ -211,11 +228,11 @@ fun TelemetryHud(
 }
 
 @Composable
-private fun HudText(text: String, modifier: Modifier = Modifier) {
+private fun HudText(text: String, modifier: Modifier = Modifier, color: Color = HudAmber) {
     Text(
         text = text,
         modifier = modifier,
-        color = HudAmber,
+        color = color,
         fontFamily = FontFamily.Monospace,
         fontSize = 13.sp,
         letterSpacing = 0.5.sp,

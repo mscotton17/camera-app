@@ -6,6 +6,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.height
@@ -20,6 +24,7 @@ import androidx.compose.material.icons.materialPath
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -141,39 +146,46 @@ fun FormatButton(format: CaptureFormat, onClick: () -> Unit, modifier: Modifier 
     }
 }
 
-/** Lens options (35mm-equivalent focal lengths) shown when the HUD focal length is tapped. */
+/**
+ * Horizontal row of choices shown under the HUD (lenses, shutter speeds, ISO, f-stops).
+ * Scrolls when it doesn't fit, starting near the selected entry.
+ */
 @Composable
-fun LensOptions(
-    lenses: List<Lens>,
-    selectedKey: String?,
-    onSelect: (Lens) -> Unit,
+fun PickerRow(
+    labels: List<String>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Row(
+    val listState = remember(labels) {
+        LazyListState(firstVisibleItemIndex = (selectedIndex - 2).coerceAtLeast(0))
+    }
+    LazyRow(
+        state = listState,
         modifier = modifier
             .clip(RoundedCornerShape(50))
-            .background(ControlBackground)
-            .padding(4.dp),
+            .background(ControlBackground),
+        contentPadding = PaddingValues(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        lenses.forEach { lens ->
-            val selected = lens.key == selectedKey
+        itemsIndexed(labels) { i, label ->
+            val selected = i == selectedIndex
             Box(
                 modifier = Modifier
                     .height(36.dp)
                     .widthIn(min = 56.dp)
                     .clip(RoundedCornerShape(50))
                     .background(if (selected) HudAmber.copy(alpha = 0.25f) else Color.Transparent)
-                    .clickable { onSelect(lens) }
-                    .semantics { contentDescription = "${lens.equivFocalMm ?: "Unknown"} millimetre lens" },
+                    .clickable { onSelect(i) },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = lens.equivFocalMm?.let { "$it mm" } ?: "? mm",
+                    text = label,
                     modifier = Modifier.padding(horizontal = 10.dp),
                     color = if (selected) HudAmber else Color.White,
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp
+                    fontSize = 12.sp,
+                    maxLines = 1
                 )
             }
         }
