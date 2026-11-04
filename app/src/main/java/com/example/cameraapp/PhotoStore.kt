@@ -120,6 +120,10 @@ fun writeExifIfMissing(context: Context, uri: Uri, t: CameraTelemetry) {
             ExifInterface.TAG_FOCAL_LENGTH,
             t.focalLengthMm?.takeIf { it > 0f }?.let { "${(it * 1000).roundToInt()}/1000" }
         )
+        setIfMissing(
+            ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM,
+            t.focalLength35mm?.takeIf { it > 0f }?.roundToInt()?.toString()
+        )
         if (changed) exif.saveAttributes()
     }
 }

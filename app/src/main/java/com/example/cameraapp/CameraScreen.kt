@@ -140,7 +140,9 @@ fun CameraScreen() {
             try {
                 cameraProvider.unbindAll()
                 telemetry.reset()
-                camera = cameraProvider.bindToLifecycle(lifecycleOwner, selector, preview, imageCapture)
+                val bound = cameraProvider.bindToLifecycle(lifecycleOwner, selector, preview, imageCapture)
+                telemetry.cropFactor = cropFactorOf(bound)
+                camera = bound
                 zoomRatio = 1f
             } catch (e: Exception) {
                 Log.e(TAG, "Use case binding failed", e)

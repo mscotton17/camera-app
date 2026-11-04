@@ -1,6 +1,7 @@
 package com.example.cameraapp
 
 import android.annotation.SuppressLint
+import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
@@ -8,7 +9,9 @@ import android.hardware.camera2.TotalCaptureResult
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.core.Camera
 import androidx.camera.core.Preview
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -31,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 /** Subdued amber used by the on-screen display. */
 val HudAmber = Color(0xFFE8B04A)
@@ -41,7 +45,23 @@ data class CameraTelemetry(
     val exposureTimeNs: Long? = null,
     val iso: Int? = null,
     val focalLengthMm: Float? = null,
+    /** 35mm-equivalent focal length; null if the sensor size is unknown. */
+    val focalLength35mm: Float? = null,
 )
+
+/** Diagonal of a 36x24mm full-frame sensor. */
+private const val FULL_FRAME_DIAGONAL_MM = 43.27f
+
+/** Ratio of full-frame diagonal to this camera's sensor diagonal, used for 35mm equivalents. */
+@SuppressLint("UnsafeOptInUsageError") // Camera2CameraInfo is marked @ExperimentalCamera2Interop
+fun cropFactorOf(camera: Camera): Float? = try {
+    val size = Camera2CameraInfo.from(camera.cameraInfo)
+        .getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+    val diagonal = size?.let { sqrt(it.width * it.width + it.height * it.height) } ?: 0f
+    if (diagonal > 0f) FULL_FRAME_DIAGONAL_MM / diagonal else null
+} catch (e: Exception) {
+    null
+}
 
 fun formatAperture(f: Float?): String =
     if (f == null || f <= 0f) "f/--" else String.format(Locale.US, "f/%.1f", f)
@@ -79,6 +99,10 @@ class TelemetryTracker {
     var latest: CameraTelemetry = CameraTelemetry()
         private set
 
+    /** Set after binding a camera; see [cropFactorOf]. */
+    @Volatile
+    var cropFactor: Float? = null
+
     @Volatile
     private var lastPublishMs = 0L
 
@@ -88,11 +112,14 @@ class TelemetryTracker {
             request: CaptureRequest,
             result: TotalCaptureResult
         ) {
+            val focal: Float? = result.get(CaptureResult.LENS_FOCAL_LENGTH)
+            val crop = cropFactor
             val t = CameraTelemetry(
                 apertureF = result.get(CaptureResult.LENS_APERTURE),
                 exposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
                 iso = result.get(CaptureResult.SENSOR_SENSITIVITY),
-                focalLengthMm = result.get(CaptureResult.LENS_FOCAL_LENGTH),
+                focalLengthMm = focal,
+                focalLength35mm = if (focal != null && crop != null) focal * crop else null,
             )
             latest = t
             val now = SystemClock.uptimeMillis()
@@ -116,14 +143,15 @@ fun Preview.Builder.attachTelemetry(tracker: TelemetryTracker): Preview.Builder 
     return this
 }
 
-/** Retro mirrorless-style OSD bar: f/1.8  |  1/250s  |  ISO 100  |  4.4mm */
+/** Retro mirrorless-style OSD bar: f/1.8  |  1/250s  |  ISO 100  |  24mm (35mm equivalent) */
 @Composable
 fun TelemetryHud(telemetry: CameraTelemetry, modifier: Modifier = Modifier) {
     val items = listOf(
         formatAperture(telemetry.apertureF),
         formatShutter(telemetry.exposureTimeNs),
         formatIso(telemetry.iso),
-        formatFocalLength(telemetry.focalLengthMm),
+        // Prefer the 35mm equivalent; fall back to the physical focal length.
+        formatFocalLength(telemetry.focalLength35mm ?: telemetry.focalLengthMm),
     )
     Box(
         modifier = modifier
