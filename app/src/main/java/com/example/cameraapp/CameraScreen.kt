@@ -671,12 +671,18 @@ fun CameraScreen() {
                         onClick = { openPicker = if (shownPicker == HudItem.EV) null else HudItem.EV }
                     )
                 }
-                RecipeButton(
-                    recipe = recipe,
-                    open = shownPicker == HudItem.RECIPE,
-                    onClick = { openPicker = if (shownPicker == HudItem.RECIPE) null else HudItem.RECIPE }
-                )
         }
+        // Film recipe button: beside the shutter (left of it in portrait, under it in
+        // landscape), with its picker opening next to it.
+        val recipeButton: @Composable (Modifier) -> Unit = { m ->
+            RecipeButton(
+                recipe = recipe,
+                open = shownPicker == HudItem.RECIPE,
+                onClick = { openPicker = if (shownPicker == HudItem.RECIPE) null else HudItem.RECIPE },
+                modifier = m
+            )
+        }
+        val recipePickerOpen = draft == null && shownPicker == HudItem.RECIPE
         val hudBar: @Composable (Modifier, Boolean) -> Unit = { m, vertical ->
             TelemetryHud(
                 telemetry = hud,
@@ -711,7 +717,7 @@ fun CameraScreen() {
                         toggleButtons()
                     }
                 }
-                if (draft == null && shownPicker != null) {
+                if (draft == null && shownPicker != null && shownPicker != HudItem.RECIPE) {
                     pickerContent(Modifier.padding(start = 10.dp).heightIn(max = 320.dp), true)
                 }
             }
@@ -719,7 +725,9 @@ fun CameraScreen() {
             // Portrait: exposure bar across the top, its picker, then the buttons.
             Column(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
                 hudBar(Modifier, false)
-                if (draft == null) pickerContent(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp), false)
+                if (draft == null && shownPicker != HudItem.RECIPE) {
+                    pickerContent(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp), false)
+                }
                 if (draft == null) FlowRow(
                     modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -825,14 +833,17 @@ fun CameraScreen() {
                     .padding(end = 24.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                if (recipePickerOpen) {
+                    pickerContent(Modifier.padding(end = 10.dp).heightIn(max = 320.dp), true)
+                }
                 Column(
                     verticalArrangement = Arrangement.spacedBy(40.dp, Alignment.CenterVertically),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     switchButton(Modifier)
                     shutterButton(Modifier)
-                    // Balances the switch button so the shutter stays centred.
-                    Spacer(Modifier.size(52.dp))
+                    // Same height as the switch button so the shutter stays centred.
+                    Box(Modifier.height(52.dp), contentAlignment = Alignment.Center) { recipeButton(Modifier) }
                 }
             }
         } else {
@@ -845,7 +856,11 @@ fun CameraScreen() {
                     .padding(bottom = 32.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                if (recipePickerOpen) {
+                    pickerContent(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 16.dp), false)
+                }
                 Box(modifier = Modifier.fillMaxWidth()) {
+                    recipeButton(Modifier.align(Alignment.CenterStart).padding(start = 20.dp))
                     shutterButton(Modifier.align(Alignment.Center))
                     switchButton(Modifier.align(Alignment.CenterEnd).padding(end = 40.dp))
                 }
