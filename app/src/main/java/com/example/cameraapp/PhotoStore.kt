@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageFormat
 import android.graphics.Matrix
 import android.net.Uri
 import android.os.Build
@@ -21,77 +22,118 @@ import androidx.exifinterface.media.ExifInterface
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 
 private const val TAG = "PhotoStore"
 private const val ALBUM = "CameraApp"
+private const val MIME_JPEG = "image/jpeg"
+private const val MIME_DNG = "image/x-adobe-dng"
 
 data class SavedPhoto(val uri: Uri, val thumbnail: Bitmap?)
 
 /**
- * Captures a JPEG into MediaStore (Pictures/CameraApp). Disk work (EXIF patching, thumbnail
- * decoding) runs on [ioExecutor]; [onResult] is always invoked on the main thread, with null
- * on failure.
+ * Captures into MediaStore (Pictures/CameraApp) as JPEG, DNG, or both. [imageCapture] must have
+ * been built with [format]'s output format. Disk work (EXIF patching, thumbnail decoding) runs
+ * on [ioExecutor]; [onResult] is always invoked on the main thread, with null on failure.
  */
 fun takePhoto(
     context: Context,
     imageCapture: ImageCapture,
+    format: CaptureFormat,
     mirror: Boolean,
     telemetry: CameraTelemetry,
     ioExecutor: Executor,
     onResult: (SavedPhoto?) -> Unit
 ) {
     val mainExecutor = ContextCompat.getMainExecutor(context)
+    // Same base name for both files of a RAW+JPEG pair.
     val name = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.US)
         .format(System.currentTimeMillis())
-    val contentValues = ContentValues().apply {
-        put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-        put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/$ALBUM")
+
+    fun outputOptions(mimeType: String, applyMirror: Boolean): ImageCapture.OutputFileOptions {
+        val contentValues = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/$ALBUM")
+            }
+        }
+        val builder = ImageCapture.OutputFileOptions.Builder(
+            context.contentResolver,
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            contentValues
+        )
+        // Front-camera preview is mirrored; mirror the saved JPEG too so it matches.
+        if (applyMirror) builder.setMetadata(ImageCapture.Metadata().apply { isReversedHorizontal = mirror })
+        return builder.build()
+    }
+
+    val finished = AtomicBoolean(false)
+    val pending = AtomicInteger(if (format == CaptureFormat.RAW_JPEG) 2 else 1)
+
+    val callback = object : ImageCapture.OnImageSavedCallback {
+        // Only touched on ioExecutor (single thread).
+        var jpegUri: Uri? = null
+        var rawUri: Uri? = null
+
+        override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+            val uri = output.savedUri
+            if (uri != null) {
+                if (output.imageFormat == ImageFormat.RAW_SENSOR) {
+                    rawUri = uri
+                } else {
+                    jpegUri = uri
+                    try {
+                        writeExifIfMissing(context, uri, telemetry)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not write EXIF exposure data", e)
+                    }
+                }
+            }
+            if (pending.decrementAndGet() > 0 || !finished.compareAndSet(false, true)) return
+            val shown = jpegUri ?: rawUri
+            val thumb = shown?.let { loadThumbnail(context, it) }
+            val message = when (format) {
+                CaptureFormat.JPEG -> "Photo saved"
+                CaptureFormat.RAW -> "DNG saved"
+                CaptureFormat.RAW_JPEG -> "DNG + JPEG saved"
+            }
+            mainExecutor.execute {
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                onResult(shown?.let { SavedPhoto(it, thumb) })
+            }
+        }
+
+        override fun onError(exc: ImageCaptureException) {
+            Log.e(TAG, "Photo capture failed", exc)
+            if (!finished.compareAndSet(false, true)) return
+            mainExecutor.execute {
+                Toast.makeText(context, "Capture failed: ${exc.message}", Toast.LENGTH_SHORT).show()
+                onResult(null)
+            }
         }
     }
-    val outputOptions = ImageCapture.OutputFileOptions.Builder(
-        context.contentResolver,
-        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-        contentValues
-    )
-        // Front-camera preview is mirrored; mirror the saved photo too so it matches.
-        .setMetadata(ImageCapture.Metadata().apply { isReversedHorizontal = mirror })
-        .build()
 
-    imageCapture.takePicture(
-        outputOptions,
-        ioExecutor,
-        object : ImageCapture.OnImageSavedCallback {
-            override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                val uri = output.savedUri
-                if (uri == null) {
-                    mainExecutor.execute { onResult(null) }
-                    return
-                }
-                try {
-                    writeExifIfMissing(context, uri, telemetry)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Could not write EXIF exposure data", e)
-                }
-                val thumb = loadThumbnail(context, uri)
-                mainExecutor.execute {
-                    Toast.makeText(context, "Photo saved", Toast.LENGTH_SHORT).show()
-                    onResult(SavedPhoto(uri, thumb))
-                }
-            }
-
-            override fun onError(exc: ImageCaptureException) {
-                Log.e(TAG, "Photo capture failed", exc)
-                mainExecutor.execute {
-                    Toast.makeText(context, "Capture failed: ${exc.message}", Toast.LENGTH_SHORT)
-                        .show()
-                    onResult(null)
-                }
-            }
+    try {
+        when (format) {
+            CaptureFormat.JPEG ->
+                imageCapture.takePicture(outputOptions(MIME_JPEG, true), ioExecutor, callback)
+            CaptureFormat.RAW ->
+                imageCapture.takePicture(outputOptions(MIME_DNG, false), ioExecutor, callback)
+            CaptureFormat.RAW_JPEG -> imageCapture.takePicture(
+                outputOptions(MIME_DNG, false),
+                outputOptions(MIME_JPEG, true),
+                ioExecutor,
+                callback
+            )
         }
-    )
+    } catch (e: Exception) {
+        Log.e(TAG, "takePicture rejected", e)
+        Toast.makeText(context, "Capture failed: ${e.message}", Toast.LENGTH_SHORT).show()
+        onResult(null)
+    }
 }
 
 /**

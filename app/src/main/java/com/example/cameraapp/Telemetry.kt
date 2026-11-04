@@ -1,17 +1,15 @@
 package com.example.cameraapp
 
 import android.annotation.SuppressLint
-import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
-import androidx.camera.core.Camera
 import androidx.camera.core.Preview
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -34,7 +32,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
 import kotlin.math.roundToInt
-import kotlin.math.sqrt
 
 /** Subdued amber used by the on-screen display. */
 val HudAmber = Color(0xFFE8B04A)
@@ -50,18 +47,7 @@ data class CameraTelemetry(
 )
 
 /** Diagonal of a 36x24mm full-frame sensor. */
-private const val FULL_FRAME_DIAGONAL_MM = 43.27f
-
-/** Ratio of full-frame diagonal to this camera's sensor diagonal, used for 35mm equivalents. */
-@SuppressLint("UnsafeOptInUsageError") // Camera2CameraInfo is marked @ExperimentalCamera2Interop
-fun cropFactorOf(camera: Camera): Float? = try {
-    val size = Camera2CameraInfo.from(camera.cameraInfo)
-        .getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-    val diagonal = size?.let { sqrt(it.width * it.width + it.height * it.height) } ?: 0f
-    if (diagonal > 0f) FULL_FRAME_DIAGONAL_MM / diagonal else null
-} catch (e: Exception) {
-    null
-}
+internal const val FULL_FRAME_DIAGONAL_MM = 43.27f
 
 fun formatAperture(f: Float?): String =
     if (f == null || f <= 0f) "f/--" else String.format(Locale.US, "f/%.1f", f)
@@ -99,9 +85,13 @@ class TelemetryTracker {
     var latest: CameraTelemetry = CameraTelemetry()
         private set
 
-    /** Set after binding a camera; see [cropFactorOf]. */
+    /** Crop factor of the bound lens, for the 35mm-equivalent focal length. */
     @Volatile
     var cropFactor: Float? = null
+
+    /** When streaming from one physical lens, read that lens's own per-frame results. */
+    @Volatile
+    var physicalId: String? = null
 
     @Volatile
     private var lastPublishMs = 0L
@@ -110,8 +100,16 @@ class TelemetryTracker {
         override fun onCaptureCompleted(
             session: CameraCaptureSession,
             request: CaptureRequest,
-            result: TotalCaptureResult
+            total: TotalCaptureResult
         ) {
+            val pid = physicalId
+            @Suppress("DEPRECATION") // getPhysicalCameraTotalResults needs API 31
+            val result: CaptureResult =
+                if (pid != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    total.physicalCameraResults[pid] ?: total
+                } else {
+                    total
+                }
             val focal: Float? = result.get(CaptureResult.LENS_FOCAL_LENGTH)
             val crop = cropFactor
             val t = CameraTelemetry(

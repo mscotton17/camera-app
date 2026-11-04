@@ -2,21 +2,12 @@ package com.example.cameraapp
 
 import android.content.Context
 import android.content.res.Configuration
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.WindowInsetsSides
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.only
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.ui.platform.LocalConfiguration
 import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.widget.Toast
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
@@ -25,29 +16,37 @@ import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.lifecycle.awaitInstance
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -61,11 +60,11 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -92,6 +91,14 @@ private fun insidePreviewFrame(w: Float, h: Float, p: Offset): Boolean {
     return p.x in left..(left + frameW) && p.y in top..(top + frameH)
 }
 
+/** Use cases currently bound to a lens. */
+private class BoundCamera(
+    val camera: Camera,
+    val preview: Preview,
+    val imageCapture: ImageCapture,
+    val format: CaptureFormat,
+)
+
 @Composable
 fun CameraScreen() {
     val context = LocalContext.current
@@ -103,28 +110,37 @@ fun CameraScreen() {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
     }
-    val imageCapture = remember {
-        ImageCapture.Builder()
-            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-            .setResolutionSelector(FourByThree)
-            .build()
-    }
     val telemetry = remember { TelemetryTracker() }
     val ioExecutor = remember { Executors.newSingleThreadExecutor() }
     DisposableEffect(Unit) { onDispose { ioExecutor.shutdown() } }
 
-    var capturing by remember { mutableStateOf(false) }
-    var lensFacing by rememberSaveable { mutableIntStateOf(CameraSelector.LENS_FACING_BACK) }
+    var provider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+    var lensSet by remember { mutableStateOf<LensSet?>(null) }
+    var selectedLensKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var format by rememberSaveable { mutableStateOf(CaptureFormat.JPEG) }
     var flash by rememberSaveable { mutableStateOf(FlashSetting.AUTO) }
-    var canSwitchCamera by remember { mutableStateOf(false) }
-    var camera by remember { mutableStateOf<Camera?>(null) }
-    var zoomRatio by remember { mutableFloatStateOf(1f) }
+    var bound by remember { mutableStateOf<BoundCamera?>(null) }
+    var capturing by remember { mutableStateOf(false) }
     var lastPhoto by remember { mutableStateOf<Uri?>(null) }
     var lastThumb by remember { mutableStateOf<ImageBitmap?>(null) }
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
     var focusKey by remember { mutableIntStateOf(0) }
     val focusScale = remember { Animatable(1f) }
-    val currentPreview = remember { arrayOfNulls<Preview>(1) }
+    val hud by telemetry.state
+
+    // Selected lens (default: the main back lens) and the format it can actually shoot.
+    val lens: Lens? = lensSet?.let { set ->
+        set.byKey(selectedLensKey) ?: set.defaultFor(CameraSelector.LENS_FACING_BACK)
+            ?: set.lenses.firstOrNull()
+    }
+    val activeFormat =
+        if (lens != null && format.outputFormat in lens.supportedFormats) format else CaptureFormat.JPEG
+
+    LaunchedEffect(Unit) {
+        val p = ProcessCameraProvider.awaitInstance(context)
+        lensSet = enumerateLenses(context, p)
+        provider = p
+    }
 
     // The activity handles rotation itself (configChanges), so the camera keeps running.
     // Tell CameraX about each new display rotation so photos are saved upright; a display
@@ -137,16 +153,17 @@ fun CameraScreen() {
             override fun onDisplayChanged(displayId: Int) {
                 val display = previewView.display ?: return
                 if (display.displayId != displayId) return
-                imageCapture.targetRotation = display.rotation
-                currentPreview[0]?.targetRotation = display.rotation
+                bound?.let {
+                    it.imageCapture.targetRotation = display.rotation
+                    it.preview.targetRotation = display.rotation
+                }
             }
         }
         displayManager.registerDisplayListener(listener, Handler(Looper.getMainLooper()))
         onDispose { displayManager.unregisterDisplayListener(listener) }
     }
-    val hud by telemetry.state
 
-    LaunchedEffect(flash) { imageCapture.flashMode = flash.mode }
+    LaunchedEffect(flash, bound) { bound?.imageCapture?.flashMode = flash.mode }
 
     // Show the newest existing photo in the thumbnail on launch.
     LaunchedEffect(Unit) {
@@ -168,74 +185,67 @@ fun CameraScreen() {
         focusPoint = null
     }
 
-    // Bind Preview + ImageCapture to the lifecycle; rebinds whenever lensFacing changes
-    // and unbinds when this composable leaves.
-    DisposableEffect(lifecycleOwner, lensFacing) {
-        val providerFuture = ProcessCameraProvider.getInstance(context)
-        var provider: ProcessCameraProvider? = null
-        providerFuture.addListener({
-            val cameraProvider = providerFuture.get()
-            provider = cameraProvider
-            val hasBack = cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)
-            val hasFront = cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)
-            canSwitchCamera = hasBack && hasFront
+    // Bind Preview + ImageCapture to the selected lens in the selected format. Rebinds when
+    // either changes and unbinds when this composable leaves.
+    DisposableEffect(lifecycleOwner, provider, lens?.key, activeFormat) {
+        val p = provider
+        if (p == null || lens == null) return@DisposableEffect onDispose { }
 
-            // Fall back to whichever camera exists if the requested one doesn't.
-            val selector = when {
-                lensFacing == CameraSelector.LENS_FACING_FRONT && hasFront ->
-                    CameraSelector.DEFAULT_FRONT_CAMERA
-                hasBack -> CameraSelector.DEFAULT_BACK_CAMERA
-                else -> CameraSelector.DEFAULT_FRONT_CAMERA
+        val previewBuilder = Preview.Builder()
+            .setResolutionSelector(FourByThree)
+            .attachTelemetry(telemetry)
+        val captureBuilder = ImageCapture.Builder()
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            .setOutputFormat(activeFormat.outputFormat)
+            .setFlashMode(flash.mode)
+        // RAW is always full sensor resolution; only constrain JPEG-only capture.
+        if (activeFormat == CaptureFormat.JPEG) captureBuilder.setResolutionSelector(FourByThree)
+        previewView.display?.rotation?.let {
+            previewBuilder.setTargetRotation(it)
+            captureBuilder.setTargetRotation(it)
+        }
+        lens.physicalId?.let {
+            previewBuilder.usePhysicalCamera(it)
+            captureBuilder.usePhysicalCamera(it)
+        }
+        val preview = previewBuilder.build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
+        val capture = captureBuilder.build()
+
+        try {
+            p.unbindAll()
+            telemetry.reset()
+            telemetry.cropFactor = lens.cropFactor
+            telemetry.physicalId = lens.physicalId
+            val camera = p.bindToLifecycle(lifecycleOwner, lens.cameraInfo.cameraSelector, preview, capture)
+            bound = BoundCamera(camera, preview, capture, activeFormat)
+        } catch (e: Exception) {
+            Log.e(TAG, "Binding ${lens.key} as $activeFormat failed", e)
+            bound = null
+            if (activeFormat != CaptureFormat.JPEG) {
+                Toast.makeText(context, "${activeFormat.label} isn't available on this lens", Toast.LENGTH_SHORT).show()
+                format = CaptureFormat.JPEG
+            } else if (lens.physicalId != null) {
+                Toast.makeText(context, "This lens can't be opened directly", Toast.LENGTH_SHORT).show()
+                selectedLensKey = lensSet?.defaultFor(lens.facing)?.key
             }
-            val preview = Preview.Builder()
-                .setResolutionSelector(FourByThree)
-                .attachTelemetry(telemetry)
-                .build()
-                .also { it.setSurfaceProvider(previewView.surfaceProvider) }
-            try {
-                cameraProvider.unbindAll()
-                telemetry.reset()
-                previewView.display?.rotation?.let {
-                    preview.targetRotation = it
-                    imageCapture.targetRotation = it
-                }
-                currentPreview[0] = preview
-                val bound = cameraProvider.bindToLifecycle(lifecycleOwner, selector, preview, imageCapture)
-                telemetry.cropFactor = cropFactorOf(bound)
-                camera = bound
-                zoomRatio = 1f
-            } catch (e: Exception) {
-                Log.e(TAG, "Use case binding failed", e)
-            }
-        }, ContextCompat.getMainExecutor(context))
+        }
 
         onDispose {
-            provider?.unbindAll()
-            camera = null
+            p.unbindAll()
+            bound = null
         }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
 
-        // Gesture layer over the preview: pinch to zoom, tap to focus/meter.
+        // Gesture layer over the preview: tap to focus/meter.
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(camera) {
-                    detectTransformGestures { _, _, zoom, _ ->
-                        val cam = camera ?: return@detectTransformGestures
-                        val zs = cam.cameraInfo.zoomState.value ?: return@detectTransformGestures
-                        val newRatio = (zoomRatio * zoom).coerceIn(zs.minZoomRatio, zs.maxZoomRatio)
-                        if (newRatio != zoomRatio) {
-                            zoomRatio = newRatio
-                            cam.cameraControl.setZoomRatio(newRatio)
-                        }
-                    }
-                }
-                .pointerInput(camera) {
+                .pointerInput(bound) {
                     detectTapGestures { offset ->
-                        val cam = camera ?: return@detectTapGestures
+                        val cam = bound?.camera ?: return@detectTapGestures
                         // Ignore taps on the black bars around the image.
                         if (!insidePreviewFrame(size.width.toFloat(), size.height.toFloat(), offset)) {
                             return@detectTapGestures
@@ -252,12 +262,12 @@ fun CameraScreen() {
                 }
         )
 
-        focusPoint?.let { p ->
+        focusPoint?.let { pt ->
             Box(
                 modifier = Modifier
                     .offset {
                         val half = 32.dp.toPx()
-                        IntOffset((p.x - half).roundToInt(), (p.y - half).roundToInt())
+                        IntOffset((pt.x - half).roundToInt(), (pt.y - half).roundToInt())
                     }
                     .size(64.dp)
                     .graphicsLayer {
@@ -268,26 +278,30 @@ fun CameraScreen() {
             )
         }
 
-        // Top: exposure OSD, with the flash toggle beneath it.
+        // Top: exposure OSD, with flash and format toggles beneath it.
         Column(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
             TelemetryHud(hud)
-            if (camera?.cameraInfo?.hasFlashUnit() == true) {
-                FlashButton(
-                    setting = flash,
-                    onClick = { flash = flash.next() },
-                    modifier = Modifier.padding(start = 12.dp, top = 12.dp)
-                )
+            Row(
+                modifier = Modifier.padding(start = 12.dp, top = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (bound?.camera?.cameraInfo?.hasFlashUnit() == true) {
+                    FlashButton(setting = flash, onClick = { flash = flash.next() })
+                }
+                if (lens != null && ImageCapture.OUTPUT_FORMAT_RAW in lens.supportedFormats) {
+                    FormatButton(format = activeFormat, onClick = { format = activeFormat.nextFor(lens) })
+                }
             }
         }
 
-        val zoomChip: @Composable () -> Unit = {
-            if (camera != null) {
-                ZoomChip(
-                    ratio = zoomRatio,
-                    onClick = {
-                        zoomRatio = 1f
-                        camera?.cameraControl?.setZoomRatio(1f)
-                    }
+        val facingLenses = lens?.let { l -> lensSet?.forFacing(l.facing) }.orEmpty()
+        val lensSelector: @Composable (Boolean) -> Unit = { vertical ->
+            if (facingLenses.size > 1) {
+                LensSelector(
+                    lenses = facingLenses,
+                    selectedKey = lens?.key,
+                    vertical = vertical,
+                    onSelect = { if (!capturing) selectedLensKey = it.key }
                 )
             }
         }
@@ -300,13 +314,15 @@ fun CameraScreen() {
         }
         val shutterButton: @Composable (Modifier) -> Unit = { m ->
             ShutterButton(
-                enabled = !capturing,
+                enabled = !capturing && bound != null,
                 onClick = {
+                    val b = bound ?: return@ShutterButton
                     capturing = true
                     takePhoto(
                         context = context,
-                        imageCapture = imageCapture,
-                        mirror = lensFacing == CameraSelector.LENS_FACING_FRONT,
+                        imageCapture = b.imageCapture,
+                        format = b.format,
+                        mirror = lens?.facing == CameraSelector.LENS_FACING_FRONT,
                         telemetry = telemetry.latest,
                         ioExecutor = ioExecutor
                     ) { saved ->
@@ -321,15 +337,17 @@ fun CameraScreen() {
             )
         }
         val switchButton: @Composable (Modifier) -> Unit = { m ->
-            if (canSwitchCamera) {
+            val set = lensSet
+            if (set != null && set.hasFrontAndBack && lens != null) {
                 SwitchCameraButton(
                     enabled = !capturing,
                     onClick = {
-                        lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
+                        val other = if (lens.facing == CameraSelector.LENS_FACING_BACK) {
                             CameraSelector.LENS_FACING_FRONT
                         } else {
                             CameraSelector.LENS_FACING_BACK
                         }
+                        selectedLensKey = set.defaultFor(other)?.key
                     },
                     modifier = m
                 )
@@ -342,7 +360,7 @@ fun CameraScreen() {
             LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
         if (isLandscape) {
             // Landscape: controls stacked on the right edge, shutter centred under the thumb,
-            // zoom chip just inside it (toward the image).
+            // lens selector just inside it (toward the image).
             Row(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
@@ -353,7 +371,7 @@ fun CameraScreen() {
                     .padding(end = 24.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                zoomChip()
+                lensSelector(true)
                 Spacer(Modifier.width(16.dp))
                 Column(
                     verticalArrangement = Arrangement.spacedBy(40.dp, Alignment.CenterVertically),
@@ -365,7 +383,7 @@ fun CameraScreen() {
                 }
             }
         } else {
-            // Portrait: zoom chip, then thumbnail / shutter / switch row along the bottom.
+            // Portrait: lens selector, then thumbnail / shutter / switch row along the bottom.
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -374,8 +392,10 @@ fun CameraScreen() {
                     .padding(bottom = 32.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                zoomChip()
-                if (camera != null) Spacer(Modifier.height(16.dp))
+                if (facingLenses.size > 1) {
+                    lensSelector(false)
+                    Spacer(Modifier.height(16.dp))
+                }
                 Box(modifier = Modifier.fillMaxWidth()) {
                     thumbnailButton(Modifier.align(Alignment.CenterStart).padding(start = 40.dp))
                     shutterButton(Modifier.align(Alignment.Center))

@@ -53,7 +53,7 @@ android {
 }
 
 dependencies {
-    val cameraxVersion = "1.4.1"
+    val cameraxVersion = "1.5.0"
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
 
     implementation("androidx.core:core-ktx:1.15.0")
