@@ -95,10 +95,11 @@ fun TopIconBar(
 ) {
     Row(
         modifier = modifier,
-        horizontalArrangement = if (compact) Arrangement.spacedBy(4.dp) else Arrangement.SpaceBetween,
+        horizontalArrangement = if (compact) Arrangement.SpaceEvenly else Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        IconSlot("Flash ${flash.label.lowercase()}", enabled = flashAvailable, onClick = onFlash) {
+        val slot = if (compact) 40.dp else 48.dp
+        IconSlot("Flash ${flash.label.lowercase()}", slot, enabled = flashAvailable, onClick = onFlash) {
             val tint = when {
                 !flashAvailable || flash == FlashSetting.OFF -> Dim
                 else -> HudAmber
@@ -111,7 +112,7 @@ fun TopIconBar(
             }
         }
         if (formatAvailable) {
-            IconSlot("Format ${format.label}", onClick = onFormat) {
+            IconSlot("Format ${format.label}", slot, onClick = onFormat) {
                 val raw = format != CaptureFormat.JPEG
                 Box(
                     Modifier
@@ -129,11 +130,11 @@ fun TopIconBar(
             }
         }
         if (timerSeconds > 0) {
-            IconSlot("Self-timer ${timerSeconds} seconds", onClick = onMenu) {
+            IconSlot("Self-timer ${timerSeconds} seconds", slot, onClick = onMenu) {
                 Text("⏲ ${timerSeconds}s", color = HudAmber, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
             }
         }
-        IconSlot("Menu", onClick = onMenu) {
+        IconSlot("Menu", slot, onClick = onMenu) {
             Canvas(Modifier.size(22.dp)) {
                 val c = if (menuOpen) HudAmber else Color.White
                 val w = 2.dp.toPx()
@@ -147,10 +148,16 @@ fun TopIconBar(
 }
 
 @Composable
-private fun IconSlot(description: String, enabled: Boolean = true, onClick: () -> Unit, content: @Composable () -> Unit) {
+private fun IconSlot(
+    description: String,
+    slot: androidx.compose.ui.unit.Dp,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit,
+) {
     Box(
         modifier = Modifier
-            .size(48.dp)
+            .size(slot)
             .clip(CircleShape)
             .clickable(enabled = enabled, onClick = onClick)
             .semantics { contentDescription = description },
@@ -422,20 +429,25 @@ fun ProStrip(cells: List<ProCell>, openItem: HudItem?, onClick: (HudItem) -> Uni
 
 /** PHOTO · PRO switch. */
 @Composable
-fun ModeToggle(pro: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
-    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
+fun ModeToggle(pro: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = Modifier, compact: Boolean = false) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 20.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         listOf(false to "PHOTO", true to "PRO").forEach { (isPro, label) ->
             val selected = isPro == pro
             Text(
                 label,
                 color = if (selected) HudAmber else Color.White.copy(alpha = 0.8f),
-                fontSize = 15.sp,
+                fontSize = if (compact) 14.sp else 15.sp,
                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                 letterSpacing = 0.5.sp,
+                maxLines = 1,
                 modifier = Modifier
                     .clip(RoundedCornerShape(50))
                     .clickable { onChange(isPro) }
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .padding(horizontal = if (compact) 8.dp else 10.dp, vertical = 6.dp)
             )
         }
     }

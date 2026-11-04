@@ -26,6 +26,7 @@ import androidx.compose.animation.core.LinearEasing
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.navigationBars
 import kotlinx.coroutines.Job
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.ui.platform.LocalDensity
@@ -90,6 +91,9 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 private const val TAG = "CameraScreen"
+
+/** Gap under the portrait shutter row (the mode toggle is placed relative to it). */
+private val ShutterRowBottomPadding = 24.dp
 
 /** Preview and capture both use the sensor's native 4:3 so the viewfinder shows the exact frame. */
 private val FourByThree = ResolutionSelector.Builder()
@@ -712,26 +716,53 @@ fun CameraScreen() {
         }
 
         if (isLandscape) {
-            // Landscape: icons, mode and (in PRO) the exposure column in the left bar.
-            Row(
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .fillMaxHeight()
-                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start + WindowInsetsSides.Vertical))
-                    .padding(start = 8.dp, top = 8.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+            // Landscape: icons, mode and (in PRO) the exposure column, centred in the left black
+            // bar and sized to it so nothing spills onto the image.
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val density = LocalDensity.current
+                val full = previewImageRect(androidx.compose.ui.geometry.Size(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat()))
+                val barWidth = with(density) { full.left.toDp() }
+                Box(
+                    Modifier
+                        .align(Alignment.CenterStart)
+                        .width(barWidth)
+                        .fillMaxHeight()
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start + WindowInsetsSides.Vertical))
+                        .padding(horizontal = 4.dp, vertical = 8.dp)
                 ) {
-                    topBar(Modifier, true)
-                    if (draft == null) ModeToggle(proMode, setMode)
-                    if (proMode) ProStrip(proCells, shownPicker, onProCell, vertical = true)
+                    Column(
+                        modifier = Modifier.align(Alignment.Center).fillMaxWidth().verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        topBar(Modifier.fillMaxWidth(), true)
+                        if (draft == null) ModeToggle(proMode, setMode, compact = true)
+                        if (proMode) ProStrip(proCells, shownPicker, onProCell, vertical = true)
+                    }
                 }
-                if (proPickerOpen) pickerContent(Modifier.padding(start = 10.dp).heightIn(max = 320.dp), true)
+                if (proPickerOpen) {
+                    pickerContent(Modifier.align(Alignment.CenterStart).offset(x = barWidth + 8.dp).heightIn(max = 320.dp), true)
+                }
             }
         } else {
+            // Portrait: PHOTO · PRO sits in the black band between the image and the shutter row
+            // (centred in it), only overlapping the image on phones with no room below it.
+            if (draft == null && !recipePickerOpen) BoxWithConstraints(Modifier.fillMaxSize()) {
+                val density = LocalDensity.current
+                val full = previewImageRect(androidx.compose.ui.geometry.Size(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat()))
+                val navPx = WindowInsets.navigationBars.getBottom(density)
+                val shutterTop = constraints.maxHeight - navPx - with(density) { (ShutterRowBottomPadding + 80.dp).toPx() }
+                val toggleHeight = with(density) { 40.dp.toPx() }
+                val gap = shutterTop - full.bottom
+                val y = if (gap >= toggleHeight) full.bottom + (gap - toggleHeight) / 2f else shutterTop - toggleHeight
+                ModeToggle(
+                    proMode, setMode,
+                    Modifier
+                        .align(Alignment.TopCenter)
+                        .offset { IntOffset(0, y.roundToInt()) }
+                        .height(40.dp)
+                )
+            }
             // Portrait: icon bar across the top.
             topBar(
                 Modifier
@@ -947,10 +978,9 @@ fun CameraScreen() {
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .navigationBarsPadding()
-                    .padding(bottom = 32.dp),
+                    .padding(bottom = ShutterRowBottomPadding),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                ModeToggle(proMode, setMode, Modifier.padding(bottom = 14.dp))
                 Box(modifier = Modifier.fillMaxWidth()) {
                     recipeButton(Modifier.align(Alignment.CenterStart).padding(start = 20.dp))
                     shutterButton(Modifier.align(Alignment.Center))
