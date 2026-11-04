@@ -3,7 +3,6 @@ package com.example.cameraapp
 import android.content.Context
 import android.content.res.Configuration
 import android.hardware.display.DisplayManager
-import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -56,8 +55,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -66,9 +63,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.math.min
@@ -117,12 +112,11 @@ fun CameraScreen() {
     var provider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
     var lensSet by remember { mutableStateOf<LensSet?>(null) }
     var selectedLensKey by rememberSaveable { mutableStateOf<String?>(null) }
-    var format by rememberSaveable { mutableStateOf(CaptureFormat.JPEG) }
+    // Default to RAW (DNG); lenses without RAW support fall back to JPEG automatically.
+    var format by rememberSaveable { mutableStateOf(CaptureFormat.RAW) }
     var flash by rememberSaveable { mutableStateOf(FlashSetting.AUTO) }
     var bound by remember { mutableStateOf<BoundCamera?>(null) }
     var capturing by remember { mutableStateOf(false) }
-    var lastPhoto by remember { mutableStateOf<Uri?>(null) }
-    var lastThumb by remember { mutableStateOf<ImageBitmap?>(null) }
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
     var focusKey by remember { mutableIntStateOf(0) }
     val focusScale = remember { Animatable(1f) }
@@ -164,17 +158,6 @@ fun CameraScreen() {
     }
 
     LaunchedEffect(flash, bound) { bound?.imageCapture?.flashMode = flash.mode }
-
-    // Show the newest existing photo in the thumbnail on launch.
-    LaunchedEffect(Unit) {
-        val found = withContext(Dispatchers.IO) {
-            queryLatestPhoto(context)?.let { uri -> uri to loadThumbnail(context, uri) }
-        }
-        if (found != null && lastPhoto == null) {
-            lastPhoto = found.first
-            lastThumb = found.second?.asImageBitmap()
-        }
-    }
 
     // Focus ring: pop in, settle, then fade away.
     LaunchedEffect(focusKey) {
@@ -305,13 +288,6 @@ fun CameraScreen() {
                 )
             }
         }
-        val thumbnailButton: @Composable (Modifier) -> Unit = { m ->
-            ThumbnailButton(
-                thumbnail = lastThumb,
-                onClick = { lastPhoto?.let { openInGallery(context, it) } },
-                modifier = m
-            )
-        }
         val shutterButton: @Composable (Modifier) -> Unit = { m ->
             ShutterButton(
                 enabled = !capturing && bound != null,
@@ -325,13 +301,7 @@ fun CameraScreen() {
                         mirror = lens?.facing == CameraSelector.LENS_FACING_FRONT,
                         telemetry = telemetry.latest,
                         ioExecutor = ioExecutor
-                    ) { saved ->
-                        capturing = false
-                        if (saved != null) {
-                            lastPhoto = saved.uri
-                            saved.thumbnail?.let { lastThumb = it.asImageBitmap() }
-                        }
-                    }
+                    ) { capturing = false }
                 },
                 modifier = m
             )
@@ -379,11 +349,12 @@ fun CameraScreen() {
                 ) {
                     switchButton(Modifier)
                     shutterButton(Modifier)
-                    thumbnailButton(Modifier)
+                    // Balances the switch button so the shutter stays centred.
+                    Spacer(Modifier.size(52.dp))
                 }
             }
         } else {
-            // Portrait: lens selector, then thumbnail / shutter / switch row along the bottom.
+            // Portrait: lens selector, then shutter / switch row along the bottom.
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -397,7 +368,6 @@ fun CameraScreen() {
                     Spacer(Modifier.height(16.dp))
                 }
                 Box(modifier = Modifier.fillMaxWidth()) {
-                    thumbnailButton(Modifier.align(Alignment.CenterStart).padding(start = 40.dp))
                     shutterButton(Modifier.align(Alignment.Center))
                     switchButton(Modifier.align(Alignment.CenterEnd).padding(end = 40.dp))
                 }

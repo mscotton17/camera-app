@@ -1,7 +1,6 @@
 package com.example.cameraapp
 
 import androidx.camera.core.ImageCapture
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -9,9 +8,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -25,9 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -108,30 +106,6 @@ fun SwitchCameraButton(enabled: Boolean, onClick: () -> Unit, modifier: Modifier
     }
 }
 
-/** Shows the last photo taken; tapping opens it in the gallery. Empty frame until one exists. */
-@Composable
-fun ThumbnailButton(thumbnail: ImageBitmap?, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val shape = RoundedCornerShape(10.dp)
-    Box(
-        modifier = modifier
-            .size(52.dp)
-            .clip(shape)
-            .background(ControlBackground)
-            .border(1.5.dp, ControlBorder, shape)
-            .clickable(enabled = thumbnail != null, onClick = onClick)
-            .semantics { contentDescription = "Open last photo" }
-    ) {
-        if (thumbnail != null) {
-            Image(
-                bitmap = thumbnail,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-    }
-}
-
 @Composable
 fun FlashButton(setting: FlashSetting, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val tint = if (setting == FlashSetting.OFF) Color.White.copy(alpha = 0.6f) else HudAmber
@@ -182,15 +156,17 @@ fun LensSelector(
             val selected = lens.key == selectedKey
             Box(
                 modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
+                    .height(36.dp)
+                    .widthIn(min = 56.dp)
+                    .clip(RoundedCornerShape(50))
                     .background(if (selected) HudAmber.copy(alpha = 0.25f) else Color.Transparent)
                     .clickable { onSelect(lens) }
                     .semantics { contentDescription = "${lens.equivFocalMm ?: "Unknown"} millimetre lens" },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = lens.equivFocalMm?.toString() ?: "?",
+                    text = lens.equivFocalMm?.let { "$it mm" } ?: "? mm",
+                    modifier = Modifier.padding(horizontal = 10.dp),
                     color = if (selected) HudAmber else Color.White,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp
