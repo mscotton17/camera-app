@@ -159,6 +159,7 @@ fun CameraScreen() {
     // UI: settings page values, PHOTO/PRO mode, the ☰ menu and the self-timer.
     val settings = remember { AppSettings(context) }
     var proMode by rememberSaveable { mutableStateOf(false) }
+    var proPanelOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     var timerSec by rememberSaveable { mutableIntStateOf(0) }
     var countdown by remember { mutableIntStateOf(0) }
@@ -569,95 +570,84 @@ fun CameraScreen() {
         }
         val shownPicker = openPicker?.takeIf { it in pickable }
         // PRO-mode picker for the tapped exposure value.
-        val proPickerOpen = proMode && draft == null && shownPicker != null && shownPicker != HudItem.RECIPE
 
-        val pickerContent: @Composable (Modifier, Boolean) -> Unit = { pm, vertical ->
-            when (shownPicker) {
-                HudItem.FOCAL -> Unit // lenses are the buttons on the image
-                HudItem.SHUTTER -> PickerRow(
-                    labels = listOf("AUTO") + shutterOptions.map { formatShutter(it) },
-                    selectedIndex = if (exposure.shutterLocked) {
-                        shutterOptions.indexOf(resolvedExposure.shutterNs) + 1
-                    } else {
-                        0
-                    },
-                    onSelect = { i ->
-                        if (caps != null) {
-                            exposure = if (i == 0) {
-                                exposure.autoShutter()
-                            } else {
-                                exposure.withShutter(shutterOptions[i - 1], telemetry.latest, caps)
-                            }
-                        }
-                    },
-                    modifier = pm,
-                    vertical = vertical
-                )
-                HudItem.ISO -> PickerRow(
-                    labels = listOf("AUTO") + isoOptions.map { "ISO $it" },
-                    selectedIndex = if (exposure.isoLocked) isoOptions.indexOf(resolvedExposure.iso) + 1 else 0,
-                    onSelect = { i ->
-                        if (caps != null) {
-                            exposure = if (i == 0) {
-                                exposure.autoIso()
-                            } else {
-                                exposure.withIso(isoOptions[i - 1], telemetry.latest, caps)
-                            }
-                        }
-                    },
-                    modifier = pm,
-                    vertical = vertical
-                )
-                HudItem.APERTURE -> {
-                    val apertures = caps?.apertures.orEmpty()
-                    PickerRow(
-                        labels = listOf("AUTO") + apertures.map { formatAperture(it) },
-                        selectedIndex = apertures.indexOf(resolvedExposure.aperture) + 1,
-                        onSelect = { i ->
-                            exposure = exposure.copy(aperture = if (i == 0) null else apertures[i - 1])
-                        },
-                        modifier = pm,
-                    vertical = vertical
-                    )
-                }
-                HudItem.EV -> PickerRow(
-                    labels = EvOptions.map { formatEv(it) },
-                    selectedIndex = EvOptions.indexOfFirst { kotlin.math.abs(it - evComp) < 0.05f },
-                    onSelect = { i -> evComp = EvOptions[i] },
-                    modifier = pm,
-                    vertical = vertical
-                )
-                HudItem.RECIPE -> Unit // shown as the recipe panel
-                null -> Unit
-            }
-        }
         // Film recipe button: beside the shutter (left of it in portrait, under it in
         // landscape), with its picker opening next to it.
         val recipeButton: @Composable (Modifier) -> Unit = { m ->
             RecipeButton(
                 recipe = recipe,
                 open = shownPicker == HudItem.RECIPE,
-                onClick = { openPicker = if (shownPicker == HudItem.RECIPE) null else HudItem.RECIPE },
+                onClick = {
+                    proPanelOpen = false
+                    openPicker = if (shownPicker == HudItem.RECIPE) null else HudItem.RECIPE
+                },
                 modifier = m
             )
         }
         val recipePickerOpen = draft == null && shownPicker == HudItem.RECIPE
-        // PRO mode: ISO, shutter, EV and aperture, each marked "A" while automatic.
-        val proCells = listOf(
-            ProCell(HudItem.ISO, (resolvedExposure.iso ?: hud.iso)?.toString() ?: "--", "ISO", !resolvedExposure.isoLocked, HudItem.ISO in pickable),
-            ProCell(HudItem.SHUTTER, formatShutter(resolvedExposure.shutterNs ?: hud.exposureTimeNs), "SHUTTER", !resolvedExposure.shutterLocked, HudItem.SHUTTER in pickable),
-            ProCell(HudItem.EV, formatEv(evComp), "EV", false, HudItem.EV in pickable),
-            ProCell(
-                HudItem.APERTURE, formatAperture(resolvedExposure.aperture ?: hud.apertureF), "APERTURE",
-                caps?.variableAperture == true && resolvedExposure.aperture == null, HudItem.APERTURE in pickable
+        // PRO panel: ISO, shutter, EV and aperture, each with its choices.
+        val apertures = caps?.apertures.orEmpty()
+        val proControls = listOf(
+            ProControl(
+                label = "ISO",
+                value = (resolvedExposure.iso ?: hud.iso)?.let { "ISO $it" } ?: "ISO --",
+                auto = !resolvedExposure.isoLocked,
+                options = listOf("AUTO") + isoOptions.map { it.toString() },
+                selected = if (exposure.isoLocked) isoOptions.indexOf(resolvedExposure.iso) + 1 else 0,
+                note = if (HudItem.ISO !in pickable) "This camera doesn't allow manual ISO" else null,
+                onSelect = { i ->
+                    if (caps != null) {
+                        exposure = if (i == 0) exposure.autoIso() else exposure.withIso(isoOptions[i - 1], telemetry.latest, caps)
+                    }
+                }
+            ),
+            ProControl(
+                label = "SHUTTER",
+                value = formatShutter(resolvedExposure.shutterNs ?: hud.exposureTimeNs),
+                auto = !resolvedExposure.shutterLocked,
+                options = listOf("AUTO") + shutterOptions.map { formatShutter(it) },
+                selected = if (exposure.shutterLocked) shutterOptions.indexOf(resolvedExposure.shutterNs) + 1 else 0,
+                note = if (HudItem.SHUTTER !in pickable) "This camera doesn't allow manual shutter speed" else null,
+                onSelect = { i ->
+                    if (caps != null) {
+                        exposure = if (i == 0) exposure.autoShutter() else exposure.withShutter(shutterOptions[i - 1], telemetry.latest, caps)
+                    }
+                }
+            ),
+            ProControl(
+                label = "EV",
+                value = formatEv(evComp),
+                auto = false,
+                options = EvOptions.map { formatEv(it) },
+                selected = EvOptions.indexOfFirst { kotlin.math.abs(it - evComp) < 0.05f },
+                note = if (fullManual) "Not used while both ISO and shutter are manual" else null,
+                onSelect = { i -> evComp = EvOptions[i] }
+            ),
+            ProControl(
+                label = "APERTURE",
+                value = formatAperture(resolvedExposure.aperture ?: hud.apertureF),
+                auto = caps?.variableAperture == true && resolvedExposure.aperture == null,
+                options = listOf("AUTO") + apertures.map { formatAperture(it) },
+                selected = apertures.indexOf(resolvedExposure.aperture) + 1,
+                note = if (caps?.variableAperture != true) "Fixed aperture on this lens" else null,
+                onSelect = { i -> exposure = exposure.copy(aperture = if (i == 0) null else apertures[i - 1]) }
             ),
         )
-        val onProCell: (HudItem) -> Unit = { openPicker = if (shownPicker == it) null else it }
-        // Leaving PRO puts exposure back to fully automatic.
+        // PRO opens its panel (tap PRO again to close it); PHOTO returns to full auto.
         val setMode: (Boolean) -> Unit = { pro ->
-            proMode = pro
             openPicker = null
-            if (!pro) exposure = ExposureSettings()
+            if (pro) {
+                if (proMode) {
+                    proPanelOpen = !proPanelOpen
+                } else {
+                    proMode = true
+                    proPanelOpen = true
+                }
+            } else {
+                proMode = false
+                proPanelOpen = false
+                exposure = ExposureSettings()
+            }
         }
         val flashAvailable = !resolvedExposure.manualSensor && bound?.camera?.cameraInfo?.hasFlashUnit() == true
         val formatAvailable = lens != null && ImageCapture.OUTPUT_FORMAT_RAW in lens.supportedFormats
@@ -698,9 +688,6 @@ fun CameraScreen() {
                 if (countdown > 0) CountdownOverlay(countdown, Modifier.fillMaxSize())
                 if (draft == null) {
                     Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                        if (proPickerOpen && !isLandscape) {
-                            pickerContent(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), false)
-                        }
                         if (facingLenses.size > 1) {
                             LensPills(
                                 lenses = facingLenses,
@@ -709,7 +696,6 @@ fun CameraScreen() {
                                 modifier = Modifier.padding(bottom = 10.dp)
                             )
                         }
-                        if (proMode && !isLandscape) ProStrip(proCells, shownPicker, onProCell, vertical = false)
                     }
                 }
             }
@@ -737,17 +723,13 @@ fun CameraScreen() {
                     ) {
                         topBar(Modifier.fillMaxWidth(), true)
                         if (draft == null) ModeToggle(proMode, setMode, compact = true)
-                        if (proMode) ProStrip(proCells, shownPicker, onProCell, vertical = true)
                     }
-                }
-                if (proPickerOpen) {
-                    pickerContent(Modifier.align(Alignment.CenterStart).offset(x = barWidth + 8.dp).heightIn(max = 320.dp), true)
                 }
             }
         } else {
             // Portrait: PHOTO · PRO sits in the black band between the image and the shutter row
             // (centred in it), only overlapping the image on phones with no room below it.
-            if (draft == null && !recipePickerOpen) BoxWithConstraints(Modifier.fillMaxSize()) {
+            if (draft == null && !recipePickerOpen && !proPanelOpen) BoxWithConstraints(Modifier.fillMaxSize()) {
                 val density = LocalDensity.current
                 val full = previewImageRect(androidx.compose.ui.geometry.Size(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat()))
                 val navPx = WindowInsets.navigationBars.getBottom(density)
@@ -907,6 +889,16 @@ fun CameraScreen() {
                     }
                 },
                 onClose = { openPicker = null },
+                modifier = panelModifier
+            )
+        } else if (proPanelOpen && editing == null) {
+            ProPanel(
+                controls = proControls,
+                onAllAuto = {
+                    exposure = ExposureSettings()
+                    evComp = 0f
+                },
+                onClose = { proPanelOpen = false },
                 modifier = panelModifier
             )
         } else if (editing != null) {
