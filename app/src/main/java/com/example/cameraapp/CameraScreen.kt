@@ -1,5 +1,16 @@
 package com.example.cameraapp
 
+import android.content.res.Configuration
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.ui.platform.LocalConfiguration
 import android.net.Uri
 import android.util.Log
 import androidx.camera.core.Camera
@@ -240,15 +251,7 @@ fun CameraScreen() {
             }
         }
 
-        // Bottom: zoom chip, then thumbnail / shutter / switch row.
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(bottom = 32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
+        val zoomChip: @Composable () -> Unit = {
             if (camera != null) {
                 ZoomChip(
                     ratio = zoomRatio,
@@ -257,50 +260,97 @@ fun CameraScreen() {
                         camera?.cameraControl?.setZoomRatio(1f)
                     }
                 )
-                Spacer(Modifier.height(16.dp))
             }
-            Box(modifier = Modifier.fillMaxWidth()) {
-                ThumbnailButton(
-                    thumbnail = lastThumb,
-                    onClick = { lastPhoto?.let { openInGallery(context, it) } },
-                    modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .padding(start = 40.dp)
-                )
-                ShutterButton(
+        }
+        val thumbnailButton: @Composable (Modifier) -> Unit = { m ->
+            ThumbnailButton(
+                thumbnail = lastThumb,
+                onClick = { lastPhoto?.let { openInGallery(context, it) } },
+                modifier = m
+            )
+        }
+        val shutterButton: @Composable (Modifier) -> Unit = { m ->
+            ShutterButton(
+                enabled = !capturing,
+                onClick = {
+                    capturing = true
+                    takePhoto(
+                        context = context,
+                        imageCapture = imageCapture,
+                        mirror = lensFacing == CameraSelector.LENS_FACING_FRONT,
+                        telemetry = telemetry.latest,
+                        ioExecutor = ioExecutor
+                    ) { saved ->
+                        capturing = false
+                        if (saved != null) {
+                            lastPhoto = saved.uri
+                            saved.thumbnail?.let { lastThumb = it.asImageBitmap() }
+                        }
+                    }
+                },
+                modifier = m
+            )
+        }
+        val switchButton: @Composable (Modifier) -> Unit = { m ->
+            if (canSwitchCamera) {
+                SwitchCameraButton(
                     enabled = !capturing,
                     onClick = {
-                        capturing = true
-                        takePhoto(
-                            context = context,
-                            imageCapture = imageCapture,
-                            mirror = lensFacing == CameraSelector.LENS_FACING_FRONT,
-                            telemetry = telemetry.latest,
-                            ioExecutor = ioExecutor
-                        ) { saved ->
-                            capturing = false
-                            if (saved != null) {
-                                lastPhoto = saved.uri
-                                saved.thumbnail?.let { lastThumb = it.asImageBitmap() }
-                            }
+                        lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
+                            CameraSelector.LENS_FACING_FRONT
+                        } else {
+                            CameraSelector.LENS_FACING_BACK
                         }
                     },
-                    modifier = Modifier.align(Alignment.Center)
+                    modifier = m
                 )
-                if (canSwitchCamera) {
-                    SwitchCameraButton(
-                        enabled = !capturing,
-                        onClick = {
-                            lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
-                                CameraSelector.LENS_FACING_FRONT
-                            } else {
-                                CameraSelector.LENS_FACING_BACK
-                            }
-                        },
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .padding(end = 40.dp)
+            } else {
+                Spacer(m.size(52.dp))
+            }
+        }
+
+        val isLandscape =
+            LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+        if (isLandscape) {
+            // Landscape: controls stacked on the right edge, shutter centred under the thumb,
+            // zoom chip just inside it (toward the image).
+            Row(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(WindowInsetsSides.End + WindowInsetsSides.Vertical)
                     )
+                    .padding(end = 24.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                zoomChip()
+                Spacer(Modifier.width(16.dp))
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(40.dp, Alignment.CenterVertically),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    switchButton(Modifier)
+                    shutterButton(Modifier)
+                    thumbnailButton(Modifier)
+                }
+            }
+        } else {
+            // Portrait: zoom chip, then thumbnail / shutter / switch row along the bottom.
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(bottom = 32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                zoomChip()
+                if (camera != null) Spacer(Modifier.height(16.dp))
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    thumbnailButton(Modifier.align(Alignment.CenterStart).padding(start = 40.dp))
+                    shutterButton(Modifier.align(Alignment.Center))
+                    switchButton(Modifier.align(Alignment.CenterEnd).padding(end = 40.dp))
                 }
             }
         }
