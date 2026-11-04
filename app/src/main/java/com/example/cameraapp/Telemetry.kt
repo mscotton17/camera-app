@@ -152,7 +152,7 @@ enum class HudItem { APERTURE, SHUTTER, ISO, FOCAL }
 /**
  * Retro mirrorless-style OSD bar: f/1.8  |  1/250s  |  ISO 100  |  24mm (35mm equivalent).
  * Items in [pickable] are outlined buttons that call [onItemClick]; [openItem] is highlighted.
- * Values fixed by the user (or held because of a manual setting) are drawn in white.
+ * Values locked by the user are drawn in white; automatic ones (camera or app metered) in amber.
  */
 @Composable
 fun TelemetryHud(
@@ -171,9 +171,9 @@ fun TelemetryHud(
         Triple(
             HudItem.SHUTTER,
             formatShutter(shutterNs ?: telemetry.exposureTimeNs),
-            shutterNs != null
+            settings.shutterLocked
         ),
-        Triple(HudItem.ISO, formatIso(iso ?: telemetry.iso), iso != null),
+        Triple(HudItem.ISO, formatIso(iso ?: telemetry.iso), settings.isoLocked),
         // The selected lens's focal length so it matches the picker; otherwise live values.
         Triple(
             HudItem.FOCAL,

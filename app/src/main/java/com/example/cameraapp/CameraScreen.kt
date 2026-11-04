@@ -64,8 +64,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -164,6 +166,22 @@ fun CameraScreen() {
     // Exposure overrides limited to what the current lens supports.
     val resolvedExposure = lens?.let { exposure.resolvedFor(it.exposure) } ?: ExposureSettings()
     LaunchedEffect(bound, resolvedExposure) { bound?.camera?.let { applyExposure(it, resolvedExposure) } }
+
+    // Shutter/ISO priority: the camera can't auto-adjust just one of them, so meter the preview
+    // ourselves a few times a second and nudge the unlocked value.
+    LaunchedEffect(bound, resolvedExposure.priorityMode, lens?.key) {
+        val caps = lens?.exposure ?: return@LaunchedEffect
+        if (bound == null || !resolvedExposure.priorityMode) return@LaunchedEffect
+        while (isActive) {
+            // Give each change time to reach the preview (several frames at long shutters).
+            val frameMs = (exposure.shutterNs ?: 0L) / 1_000_000L
+            delay(max(250L, frameMs * 3))
+            if (capturing) continue
+            val luma = previewView.bitmap?.let { meanLuma(it) } ?: continue
+            val next = exposure.resolvedFor(caps).meteredStep(luma, caps)
+            if (next != exposure) exposure = next
+        }
+    }
 
     // Flash relies on auto-exposure, so it's off while shutter/ISO are manual.
     LaunchedEffect(flash, bound, resolvedExposure.manualSensor) {
@@ -318,7 +336,7 @@ fun CameraScreen() {
                     onSelect = { i ->
                         if (caps != null) {
                             exposure = if (i == 0) {
-                                exposure.autoSensor()
+                                exposure.autoShutter()
                             } else {
                                 exposure.withShutter(shutterOptions[i - 1], telemetry.latest, caps)
                             }
@@ -332,7 +350,7 @@ fun CameraScreen() {
                     onSelect = { i ->
                         if (caps != null) {
                             exposure = if (i == 0) {
-                                exposure.autoSensor()
+                                exposure.autoIso()
                             } else {
                                 exposure.withIso(isoOptions[i - 1], telemetry.latest, caps)
                             }

@@ -1,18 +1,29 @@
 package com.example.cameraapp
 
 import android.annotation.SuppressLint
+import android.graphics.Bitmap
 import android.hardware.camera2.CaptureRequest
 import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.core.Camera
+import kotlin.math.abs
+import kotlin.math.log2
 import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
-/** Shutter speeds offered in the picker (1/8000s .. 1s), filtered per lens. */
+/** Shutter speeds offered in the picker, slowest to fastest (1s .. 1/8000s), filtered per lens. */
 private val ShutterStopsNs: List<Long> =
-    listOf(8000, 4000, 2000, 1000, 500, 250, 125, 60, 30, 15, 8, 4, 2)
-        .map { 1_000_000_000L / it } + 1_000_000_000L
+    listOf(1_000_000_000L) + listOf(2, 4, 8, 15, 30, 60, 125, 250, 500, 1000, 2000, 4000, 8000)
+        .map { 1_000_000_000L / it }
+
+/** Longest shutter the app picks by itself in ISO priority, to keep the viewfinder usable. */
+private const val AUTO_SHUTTER_MAX_NS = 1_000_000_000L / 8
+
+/** Mean preview brightness (gamma-encoded, 0..1) the metering loop aims for: a mid-tone. */
+private const val TARGET_LUMA = 0.46f
 
 /** ISO values offered in the picker, filtered per lens. */
 private val IsoStops = listOf(25, 50, 100, 200, 400, 800, 1600, 3200, 6400, 12800)
@@ -26,9 +37,10 @@ fun ExposureCaps.isoOptions(): List<Int> =
 /**
  * User exposure overrides. Everything is automatic by default.
  *
- * Camera2 has no shutter- or ISO-priority mode: turning off auto-exposure means fixing both.
- * So when only one of them is picked, the other is derived to keep the current brightness
- * and then held ([shutterLocked]/[isoLocked] record which ones the user chose).
+ * Camera2 has no shutter- or ISO-priority mode: turning off auto-exposure means sending both
+ * values. When the user locks only one ([shutterLocked] / [isoLocked]), the other starts at a
+ * value that keeps the current brightness and is then kept on target by [meteredStep], which
+ * the screen runs a few times a second from the preview's brightness ("priority" modes).
  */
 data class ExposureSettings(
     val shutterNs: Long? = null,
@@ -39,6 +51,9 @@ data class ExposureSettings(
     val aperture: Float? = null,
 ) {
     val manualSensor: Boolean get() = shutterNs != null && iso != null
+
+    /** Exactly one of shutter/ISO is locked, so the app meters and adjusts the other. */
+    val priorityMode: Boolean get() = manualSensor && shutterLocked != isoLocked
 
     /** Fix the shutter speed; derive ISO from [current] brightness unless the user set it. */
     fun withShutter(ns: Long, current: CameraTelemetry, caps: ExposureCaps): ExposureSettings {
@@ -71,6 +86,36 @@ data class ExposureSettings(
     /** Back to automatic shutter speed and ISO (keeps any chosen aperture). */
     fun autoSensor(): ExposureSettings =
         copy(shutterNs = null, iso = null, shutterLocked = false, isoLocked = false)
+
+    /** Shutter back to auto: ISO priority if ISO is locked, otherwise full auto. */
+    fun autoShutter(): ExposureSettings = if (isoLocked) copy(shutterLocked = false) else autoSensor()
+
+    /** ISO back to auto: shutter priority if the shutter is locked, otherwise full auto. */
+    fun autoIso(): ExposureSettings = if (shutterLocked) copy(isoLocked = false) else autoSensor()
+
+    /**
+     * One step of the app's own metering in priority modes: moves the unlocked value toward
+     * [TARGET_LUMA] given the preview's mean brightness [meanLuma] (0..1).
+     */
+    fun meteredStep(meanLuma: Float, caps: ExposureCaps): ExposureSettings {
+        val ns = shutterNs ?: return this
+        val sensitivity = iso ?: return this
+        if (!priorityMode) return this
+        val errorEv = log2(TARGET_LUMA / meanLuma.coerceIn(0.01f, 0.99f))
+        if (abs(errorEv) < 0.15f) return this
+        // Damped so it settles smoothly; limited per step because a clipped frame
+        // under-reports how far off it is.
+        val factor = 2.0.pow((errorEv * 0.7f).coerceIn(-1.5f, 1.5f).toDouble())
+        return if (shutterLocked) {
+            val target = (sensitivity * factor).roundToInt()
+            copy(iso = caps.isoRange?.clamp(target) ?: target)
+        } else {
+            val range = caps.exposureRangeNs
+            val lower = range?.lower ?: 1L
+            val upper = min(range?.upper ?: AUTO_SHUTTER_MAX_NS, AUTO_SHUTTER_MAX_NS).coerceAtLeast(lower)
+            copy(shutterNs = (ns * factor).roundToLong().coerceIn(lower, upper))
+        }
+    }
 
     /** These settings limited to what [caps] supports (e.g. after switching lens). */
     fun resolvedFor(caps: ExposureCaps): ExposureSettings {
@@ -115,4 +160,28 @@ fun applyExposure(camera: Camera, settings: ExposureSettings) {
         .setCaptureRequestOption(CaptureRequest.SENSOR_FRAME_DURATION, max(shutter, 33_333_333L))
     if (aperture != null) builder.setCaptureRequestOption(CaptureRequest.LENS_APERTURE, aperture)
     control.setCaptureRequestOptions(builder.build())
+}
+
+/** Mean brightness (0..1) of the camera image within a FIT_CENTER [preview] bitmap. */
+fun meanLuma(preview: Bitmap): Float? {
+    val w = preview.width
+    val h = preview.height
+    if (w == 0 || h == 0) return null
+    // Measure only the image, not the black bars around it.
+    val ratio = if (h > w) 3f / 4f else 4f / 3f
+    val frameW = min(w.toFloat(), h * ratio)
+    val frameH = frameW / ratio
+    val left = ((w - frameW) / 2f).roundToInt()
+    val top = ((h - frameH) / 2f).roundToInt()
+    val small = Bitmap.createScaledBitmap(
+        Bitmap.createBitmap(preview, left, top, frameW.roundToInt().coerceAtMost(w - left), frameH.roundToInt().coerceAtMost(h - top)),
+        48, 36, true
+    )
+    val pixels = IntArray(small.width * small.height)
+    small.getPixels(pixels, 0, small.width, 0, 0, small.width, small.height)
+    var sum = 0.0
+    for (c in pixels) {
+        sum += 0.2126 * ((c shr 16) and 0xFF) + 0.7152 * ((c shr 8) and 0xFF) + 0.0722 * (c and 0xFF)
+    }
+    return (sum / pixels.size / 255.0).toFloat()
 }
