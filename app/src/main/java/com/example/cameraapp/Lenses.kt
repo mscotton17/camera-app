@@ -34,6 +34,8 @@ data class Lens(
     val facing: Int,
     /** 35mm-equivalent focal length, if the sensor size is known. */
     val equivFocalMm: Int?,
+    /** Real (physical) focal length of the lens in mm. */
+    val focalMm: Float?,
     val cropFactor: Float?,
     /** ImageCapture.OUTPUT_FORMAT_* values this lens can capture. */
     val supportedFormats: Set<Int>,
@@ -58,8 +60,11 @@ private fun CameraCharacteristics.cropFactor(): Float? {
     return if (diagonal > 0f) FULL_FRAME_DIAGONAL_MM / diagonal else null
 }
 
+private fun CameraCharacteristics.focalMm(): Float? =
+    get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.minOrNull()
+
 private fun CameraCharacteristics.equivFocalMm(crop: Float?): Int? {
-    val focal = get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.minOrNull()
+    val focal = focalMm()
     return if (focal != null && crop != null) (focal * crop).roundToInt() else null
 }
 
@@ -93,7 +98,7 @@ fun enumerateLenses(context: Context, provider: ProcessCameraProvider): LensSet 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) chars.physicalCameraIds else emptySet()
             if (physicalIds.size < 2) {
                 val crop = chars.cropFactor()
-                found += Lens(logicalId, info, null, facing, chars.equivFocalMm(crop), crop, formats)
+                found += Lens(logicalId, info, null, facing, chars.equivFocalMm(crop), chars.focalMm(), crop, formats)
                 continue
             }
 
@@ -114,6 +119,7 @@ fun enumerateLenses(context: Context, provider: ProcessCameraProvider): LensSet 
                     physicalId = if (isMain) null else pid,
                     facing = facing,
                     equivFocalMm = pc.equivFocalMm(crop),
+                    focalMm = pc.focalMm(),
                     cropFactor = crop,
                     supportedFormats = if (isMain || pc.hasRaw()) formats else formats - RawFormats,
                 )
@@ -133,7 +139,21 @@ fun enumerateLenses(context: Context, provider: ProcessCameraProvider): LensSet 
         }
         if (!duplicate) unique += lens
     }
-    return LensSet(unique.sortedBy { it.equivFocalMm ?: Int.MAX_VALUE }, defaults)
+    // Drop sensor crops (e.g. Pixel's 2x "optical quality" modes): they use the same physical
+    // lens as another entry (same real focal length) on a smaller part of its sensor, which
+    // shows up as a larger crop factor. Only genuinely separate lenses remain.
+    val realLenses = unique.filter { candidate -> unique.none { other -> isCropOf(candidate, other) } }
+    return LensSet(realLenses.sortedBy { it.equivFocalMm ?: Int.MAX_VALUE }, defaults)
+}
+
+/** True if [crop] is a sensor crop of [parent]: same lens, smaller sensor area. */
+private fun isCropOf(crop: Lens, parent: Lens): Boolean {
+    if (crop === parent || crop.facing != parent.facing) return false
+    val f1 = crop.focalMm ?: return false
+    val f2 = parent.focalMm ?: return false
+    val c1 = crop.cropFactor ?: return false
+    val c2 = parent.cropFactor ?: return false
+    return abs(f1 - f2) <= 0.02f * f2 && c1 > c2 * 1.3f
 }
 
 /** Streams this use case from one physical lens of a logical multi-camera (API 28+). */
