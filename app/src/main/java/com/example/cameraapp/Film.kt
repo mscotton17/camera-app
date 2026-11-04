@@ -280,37 +280,10 @@ data class FilmRecipe(
     fun curve(channel: CurveChannel): List<Float> = curves[channel] ?: NeutralCurve
 }
 
+/** Built-in recipes (STD, no recipe, is always offered first). Both use the full 4:3 frame. */
 val FilmRecipes: List<FilmRecipe> = listOf(
-    // Muted, documentary colour: subdued primaries, deeper shadows with a teal cast,
-    // gently held-back highlights.
-    FilmRecipe(
-        id = "chrome", label = "CHROME",
-        redGain = 0.98f, satR = 0.68f, satG = 0.78f, satB = 0.72f,
-        shadows = -0.045f, highlights = -0.02f, whitePoint = 0.97f,
-        shadowTint = Tint(r = -0.018f, g = 0.004f, b = 0.016f),
-        highlightTint = Tint(r = 0.01f, g = 0.004f, b = -0.01f),
-        grain = 0.025f,
-    ),
-    // Warm portrait negative: golden midtones, lifted matte blacks, soft highlight roll-off,
-    // restrained greens and blues.
-    FilmRecipe(
-        id = "portrait", label = "PORTRAIT",
-        redGain = 1.05f, blueGain = 0.94f, satR = 0.95f, satG = 0.82f, satB = 0.8f,
-        blackPoint = 0.035f, shadows = 0.012f, mids = 0.01f, highlights = -0.03f, whitePoint = 0.965f,
-        shadowTint = Tint(r = -0.01f, b = 0.01f),
-        midTint = Tint(r = 0.016f, g = 0.007f, b = -0.016f),
-        grain = 0.03f,
-    ),
-    // High-contrast black and white: green-weighted mix, deep blacks, bright highlights,
-    // pronounced grain.
-    FilmRecipe(
-        id = "mono_hc", label = "MONO HC",
-        mono = Triple(0.30f, 0.60f, 0.10f),
-        shadows = -0.065f, highlights = 0.045f,
-        grain = 0.065f,
-    ),
     // Reggie's HP5: punchy black and white through a red filter — deep contrast, dark skies,
-    // fine organic grain that sits mostly in the shadows, 3:2 frame.
+    // fine organic grain that sits mostly in the shadows.
     FilmRecipe(
         id = "reggies_hp5", label = "REGGIE'S HP5",
         mono = Triple(0.60f, 0.35f, 0.05f),
@@ -321,11 +294,10 @@ val FilmRecipes: List<FilmRecipe> = listOf(
         vignette = 0.15f, vignetteFeather = 0.75f, vignetteRoundness = 1.0f,
         grain = 0.025f, grainSize = 1.0f, grainColor = 0f, grainRoughness = 0.25f,
         grainShadows = 1.1f, grainMids = 1.0f, grainHighlights = 0.2f,
-        aspect = AspectRatio.THREE_TWO,
         whiteBalance = WhiteBalance.AUTO, defaultEvOn = true, defaultEv = 1f / 3f,
     ),
     // Reggie's Portra: warm golden-peach midtones, gentle highlight roll-off, soft shadows and
-    // subtle warm dye grain on a muted documentary base; 3:2 frame.
+    // subtle warm dye grain on a muted documentary base.
     FilmRecipe(
         id = "reggies_portra", label = "REGGIE'S PORTRA",
         temperature = 6600f, redGain = 1.05f, blueGain = 0.93f, tint = 0.008f, hueShift = 0f,
@@ -351,64 +323,6 @@ val FilmRecipes: List<FilmRecipe> = listOf(
         vignette = 0.18f, vignetteFeather = 0.80f, vignetteRoundness = 1.0f,
         grain = 0.025f, grainSize = 1.0f, grainColor = 0.20f, grainColorBias = 0.65f, grainRoughness = 0.20f,
         grainShadows = 1.1f, grainMids = 1.0f, grainHighlights = 0.2f,
-        aspect = AspectRatio.THREE_TWO,
         whiteBalance = WhiteBalance.AUTO, defaultEvOn = true, defaultEv = 1f / 3f,
-    ),
-    // Gritty street look: punchy micro-contrast, dense colour that holds saturated signs and
-    // clothing without clipping, cool shadows, a strong vignette.
-    FilmRecipe(
-        id = "street", label = "STREET",
-        satR = 1.08f, satG = 0.88f, satB = 1.02f,
-        shadows = -0.045f, highlights = 0.015f,
-        shadowTint = Tint(r = -0.01f, b = 0.01f),
-        grain = 0.035f, vignette = 0.35f, clarity = 0.35f, colorChrome = 0.7f,
-    ),
-    // Tungsten cinema stock: cool cast, glowing red halation around lights, olive greens,
-    // deep teal-blue skies, soft clarity and coarse colour grain.
-    FilmRecipe(
-        id = "cine", label = "CINE",
-        redGain = 0.97f, blueGain = 1.04f, tint = 0.015f,
-        satR = 1.0f, satG = 0.85f, satB = 0.95f,
-        blackPoint = 0.02f, shadows = -0.02f, highlights = -0.03f, whitePoint = 0.97f,
-        shadowTint = Tint(r = -0.012f, g = 0.004f, b = 0.012f),
-        highlightTint = Tint(r = 0.012f, g = 0.004f, b = -0.008f),
-        grain = 0.04f, grainSize = 1.8f, grainColor = 0.35f,
-        clarity = -0.1f, halation = 0.55f,
-        hsl = mapOf(
-            ColorBand.GREEN to HslAdjust(hue = -12f, sat = -0.25f),
-            ColorBand.BLUE to HslAdjust(hue = -8f, sat = 0.1f, lum = -0.1f),
-            ColorBand.ORANGE to HslAdjust(sat = 0.05f, lum = 0.05f),
-        ),
-    ),
-    // Disposable point-and-shoot: warm, flash-friendly, soft corners, a light leak, orange
-    // date stamp and a thin black frame.
-    FilmRecipe(
-        id = "snapshot", label = "SNAPSHOT",
-        temperature = 7200f, satR = 1.1f, satG = 0.95f, satB = 0.9f, vibrance = 0.15f,
-        blackPoint = 0.03f, shadows = -0.01f, highlights = -0.02f, whitePoint = 0.96f,
-        toe = 0.2f, shoulder = 0.35f,
-        midTint = Tint(r = 0.01f, b = -0.01f),
-        cornerSoftness = 0.4f, chromaticAberration = 0.25f, bloom = 0.2f,
-        vignette = 0.3f, vignetteFeather = 0.8f,
-        lightLeak = 0.35f, lightLeakAngle = 30f, lightLeakSize = 0.45f,
-        grain = 0.045f, grainSize = 1.5f, grainColor = 0.25f, grainRoughness = 0.3f,
-        dust = 0.15f,
-        dateStamp = true, border = BorderStyle.THIN,
-    ),
-    // Panoramic 65:24 on a 35mm strip: cool, crisp, deep blue skies, film rebate border.
-    FilmRecipe(
-        id = "pano", label = "PANO",
-        satR = 0.9f, satG = 0.9f, satB = 1.05f, colorChromeBlue = 0.6f,
-        shadows = -0.03f, highlights = 0.01f, contrast = 0.15f,
-        shadowTint = Tint(r = -0.008f, b = 0.01f),
-        clarity = 0.15f, vignette = 0.25f, vignetteRoundness = 0.3f,
-        grain = 0.025f,
-        aspect = AspectRatio.PANORAMA, border = BorderStyle.REBATE,
-    ),
-    // Saturated slide film: punchy colour and contrast, no grain.
-    FilmRecipe(
-        id = "vivid", label = "VIVID",
-        satR = 1.35f, satG = 1.3f, satB = 1.3f,
-        shadows = -0.03f, highlights = 0.02f,
     ),
 )
