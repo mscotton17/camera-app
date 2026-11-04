@@ -315,7 +315,7 @@ fun EvButton(ev: Float, open: Boolean, onClick: () -> Unit, modifier: Modifier =
     }
 }
 
-/** Film recipe pill: "STD" when off, otherwise the recipe name in amber. */
+/** Film recipe pill showing the active recipe's name in amber. */
 @Composable
 fun RecipeButton(recipe: FilmRecipe?, open: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val label = recipe?.label ?: "STD"

@@ -95,17 +95,6 @@ fun RecipePanel(
             EditorButton("✕", onClick = onClose)
         }
         LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            item(key = "std") {
-                RecipeRow(
-                    name = "STD",
-                    summary = "No recipe · the camera's own picture",
-                    selected = selectedId == null,
-                    favorite = null,
-                    onClick = { onSelect(null) },
-                    onFavorite = {},
-                    onEdit = null
-                )
-            }
             items(recipes, key = { it.id }) { r ->
                 RecipeRow(
                     name = r.label,

@@ -184,7 +184,7 @@ fun CameraScreen() {
     }
     val updateLibrary: (RecipeLibrary) -> Unit = { library = it; recipeStore.save(it) }
     var luts by remember { mutableStateOf(CubeLuts.list(context)) }
-    // Selected recipe (null = standard). Kept while the app runs.
+    // Selected recipe. Kept while the app runs.
     var recipeId by rememberSaveable { mutableStateOf<String?>(null) }
     // There's no "no recipe" option: if nothing (or a deleted recipe) is selected, the first
     // recipe in the list is used.
