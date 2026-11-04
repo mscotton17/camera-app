@@ -16,6 +16,18 @@ android {
         versionName = "1.0"
     }
 
+    // Fixed debug key committed to the repo so every CI build is signed identically.
+    // Without this, each runner generates a random debug key and Android refuses to
+    // install updates over a previous build ("App not installed").
+    signingConfigs {
+        getByName("debug") {
+            storeFile = rootProject.file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
