@@ -324,6 +324,36 @@ val FilmRecipes: List<FilmRecipe> = listOf(
         aspect = AspectRatio.THREE_TWO,
         whiteBalance = WhiteBalance.AUTO, defaultEvOn = true, defaultEv = 1f / 3f,
     ),
+    // Reggie's Portra: warm golden-peach midtones, gentle highlight roll-off, soft shadows and
+    // subtle warm dye grain on a muted documentary base; 3:2 frame.
+    FilmRecipe(
+        id = "reggies_portra", label = "REGGIE'S PORTRA",
+        temperature = 6600f, redGain = 1.05f, blueGain = 0.93f, tint = 0.008f, hueShift = 0f,
+        satR = 1.08f, satG = 0.95f, satB = 0.92f, vibrance = 0.20f, highlightSat = -0.15f, shadowSat = 0.05f,
+        colorChrome = 0.70f, colorChromeBlue = 0.35f, bleachBypass = 0f, skinProtect = 0.50f,
+        hsl = mapOf(
+            ColorBand.ORANGE to HslAdjust(sat = 0.08f),
+            ColorBand.YELLOW to HslAdjust(hue = -3f),
+            ColorBand.GREEN to HslAdjust(hue = -8f, sat = -0.12f),
+            ColorBand.AQUA to HslAdjust(hue = 4f),
+            ColorBand.BLUE to HslAdjust(sat = -0.08f, lum = -0.05f),
+        ),
+        exposure = 0f, contrast = -0.05f, blackPoint = 0.020f, shadows = 0.030f, mids = 0.015f,
+        highlights = -0.035f, whitePoint = 0.97f,
+        toe = 0.20f, shoulder = 0.40f, highlightRecovery = 0.10f, shadowRecovery = 0.05f,
+        dynamicRange = DynamicRange.DR200,
+        shadowTint = Tint(r = -0.008f, g = 0.004f, b = 0.010f),
+        midTint = Tint(r = 0.016f, g = 0.006f, b = -0.014f),
+        highlightTint = Tint(r = 0.006f, g = 0.002f, b = -0.004f),
+        sharpen = -0.20f, cornerSoftness = 0.08f, chromaticAberration = 0f,
+        clarity = -0.05f, clarityRadius = 1.0f,
+        bloom = 0.15f, bloomThreshold = 0.75f, bloomRadius = 1.0f,
+        vignette = 0.18f, vignetteFeather = 0.80f, vignetteRoundness = 1.0f,
+        grain = 0.025f, grainSize = 1.0f, grainColor = 0.20f, grainColorBias = 0.65f, grainRoughness = 0.20f,
+        grainShadows = 1.1f, grainMids = 1.0f, grainHighlights = 0.2f,
+        aspect = AspectRatio.THREE_TWO,
+        whiteBalance = WhiteBalance.AUTO, defaultEvOn = true, defaultEv = 1f / 3f,
+    ),
     // Gritty street look: punchy micro-contrast, dense colour that holds saturated signs and
     // clothing without clipping, cool shadows, a strong vignette.
     FilmRecipe(

@@ -85,7 +85,7 @@ fun RecipeEditor(
         ) {
             BasicTextField(
                 value = draft.label,
-                onValueChange = { onChange(draft.copy(label = it.uppercase(Locale.US).take(14))) },
+                onValueChange = { onChange(draft.copy(label = it.uppercase(Locale.US).take(16))) },
                 singleLine = true,
                 textStyle = TextStyle(color = HudAmber, fontFamily = FontFamily.Monospace, fontSize = 16.sp),
                 cursorBrush = SolidColor(HudAmber),
