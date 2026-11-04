@@ -1,6 +1,22 @@
 package com.example.cameraapp
 
 import androidx.camera.core.ImageCapture
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.runtime.getValue
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -80,18 +96,80 @@ enum class CaptureFormat(val outputFormat: Int, val label: String) {
     }
 }
 
+/**
+ * Shutter button. It squishes with a spring while pressed. While a long exposure runs, an
+ * amber ring sweeps for its duration ([exposureProgress] 0..1); while the photo is being
+ * processed and saved ([busy]), a short amber arc spins around the ring.
+ */
 @Composable
-fun ShutterButton(enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun ShutterButton(
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    busy: Boolean = false,
+    exposureProgress: Float? = null,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.88f else 1f,
+        animationSpec = spring(dampingRatio = 0.45f, stiffness = 600f),
+        label = "shutterScale"
+    )
+    val discScale by animateFloatAsState(
+        targetValue = if (pressed) 0.82f else 1f,
+        animationSpec = spring(dampingRatio = 0.5f, stiffness = 700f),
+        label = "shutterDisc"
+    )
+    // Only animate the spinner while it's visible.
+    var spinAngle = 0f
+    if (busy && exposureProgress == null) {
+        val spin = rememberInfiniteTransition(label = "shutterSpin")
+        spinAngle = spin.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing)),
+            label = "shutterSpinAngle"
+        ).value
+    }
     Box(
         modifier = modifier
             .size(80.dp)
-            .border(4.dp, Color.White, CircleShape)
-            .padding(8.dp)
-            .clip(CircleShape)
-            .background(if (enabled) Color.White else Color.Gray)
-            .clickable(enabled = enabled, onClick = onClick)
-            .semantics { contentDescription = "Take photo" }
-    )
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clickable(interactionSource = interaction, indication = null, enabled = enabled, onClick = onClick)
+            .semantics { contentDescription = "Take photo" },
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(Modifier.size(80.dp)) {
+            val stroke = 4.dp.toPx()
+            val arcSize = Size(size.width - stroke, size.height - stroke)
+            val topLeft = Offset(stroke / 2f, stroke / 2f)
+            drawCircle(Color.White, radius = (size.minDimension - stroke) / 2f, style = Stroke(stroke))
+            when {
+                exposureProgress != null -> drawArc(
+                    HudAmber, -90f, 360f * exposureProgress.coerceIn(0f, 1f), false,
+                    topLeft = topLeft, size = arcSize, style = Stroke(stroke, cap = StrokeCap.Round)
+                )
+                busy -> drawArc(
+                    HudAmber, spinAngle - 90f, 90f, false,
+                    topLeft = topLeft, size = arcSize, style = Stroke(stroke, cap = StrokeCap.Round)
+                )
+            }
+        }
+        Box(
+            Modifier
+                .size(64.dp)
+                .graphicsLayer {
+                    scaleX = discScale
+                    scaleY = discScale
+                }
+                .clip(CircleShape)
+                .background(if (enabled || busy) Color.White else Color.Gray)
+        )
+    }
 }
 
 @Composable

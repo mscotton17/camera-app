@@ -22,6 +22,9 @@ import androidx.camera.lifecycle.awaitInstance
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.verticalScroll
@@ -140,6 +143,11 @@ fun CameraScreen() {
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
     var focusKey by remember { mutableIntStateOf(0) }
     val focusScale = remember { Animatable(1f) }
+    // Shutter feel: haptic ticks and the long-exposure ring sweep.
+    val haptics = remember { ShutterHaptics(context) }
+    val uiScope = rememberCoroutineScope()
+    val exposureSweep = remember { Animatable(0f) }
+    var exposureRunning by remember { mutableStateOf(false) }
     val hud by telemetry.state
 
     // Selected lens (default: the main back lens) and the format it can actually shoot.
@@ -741,9 +749,27 @@ fun CameraScreen() {
         val shutterButton: @Composable (Modifier) -> Unit = { m ->
             ShutterButton(
                 enabled = !capturing && bound != null,
+                busy = capturing,
+                exposureProgress = if (exposureRunning) exposureSweep.value else null,
                 onClick = {
                     val b = bound ?: return@ShutterButton
                     capturing = true
+                    // Feel: open click now, close tick after the exposure time; long exposures
+                    // also sweep the ring for their duration before the processing spinner.
+                    val exposureMs = ((resolvedExposure.shutterNs ?: telemetry.latest.exposureTimeNs ?: 0L) / 1_000_000L)
+                    haptics.tick(opening = true)
+                    uiScope.launch {
+                        delay(max(exposureMs, ShutterHaptics.MIN_GAP_MS))
+                        haptics.tick(opening = false)
+                    }
+                    if (exposureMs >= 100L) {
+                        uiScope.launch {
+                            exposureRunning = true
+                            exposureSweep.snapTo(0f)
+                            exposureSweep.animateTo(1f, tween(exposureMs.toInt(), easing = LinearEasing))
+                            exposureRunning = false
+                        }
+                    }
                     takePhoto(
                         context = context,
                         imageCapture = b.imageCapture,

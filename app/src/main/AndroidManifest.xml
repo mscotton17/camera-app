@@ -4,6 +4,8 @@
     <uses-feature android:name="android.hardware.camera.any" />
 
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Shutter haptics. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Only needed to write to MediaStore on Android 9 (API 28) and below. -->
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
