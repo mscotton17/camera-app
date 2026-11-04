@@ -11,7 +11,10 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.ui.platform.LocalConfiguration
+import android.hardware.display.DisplayManager
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -120,6 +123,26 @@ fun CameraScreen() {
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
     var focusKey by remember { mutableIntStateOf(0) }
     val focusScale = remember { Animatable(1f) }
+    val currentPreview = remember { arrayOfNulls<Preview>(1) }
+
+    // The activity handles rotation itself (configChanges), so the camera keeps running.
+    // Tell CameraX about each new display rotation so photos are saved upright; a display
+    // listener also catches 180-degree flips, which don't trigger a configuration change.
+    DisposableEffect(Unit) {
+        val displayManager = context.getSystemService(DisplayManager::class.java)
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) = Unit
+            override fun onDisplayRemoved(displayId: Int) = Unit
+            override fun onDisplayChanged(displayId: Int) {
+                val display = previewView.display ?: return
+                if (display.displayId != displayId) return
+                imageCapture.targetRotation = display.rotation
+                currentPreview[0]?.targetRotation = display.rotation
+            }
+        }
+        displayManager.registerListener(listener, Handler(Looper.getMainLooper()))
+        onDispose { displayManager.unregisterListener(listener) }
+    }
     val hud by telemetry.state
 
     LaunchedEffect(flash) { imageCapture.flashMode = flash.mode }
@@ -171,6 +194,11 @@ fun CameraScreen() {
             try {
                 cameraProvider.unbindAll()
                 telemetry.reset()
+                previewView.display?.rotation?.let {
+                    preview.targetRotation = it
+                    imageCapture.targetRotation = it
+                }
+                currentPreview[0] = preview
                 val bound = cameraProvider.bindToLifecycle(lifecycleOwner, selector, preview, imageCapture)
                 telemetry.cropFactor = cropFactorOf(bound)
                 camera = bound
