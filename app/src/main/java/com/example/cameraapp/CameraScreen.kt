@@ -23,6 +23,9 @@ import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -543,27 +546,24 @@ fun CameraScreen() {
         }
         val shownPicker = openPicker?.takeIf { it in pickable }
 
-        // Top: exposure OSD (tap a value to change it), its picker, then flash/format toggles.
-        Column(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
-            TelemetryHud(
-                telemetry = hud,
-                settings = resolvedExposure,
-                lensFocalMm = lens?.equivFocalMm,
-                pickable = pickable,
-                openItem = shownPicker,
-                onItemClick = { openPicker = if (shownPicker == it) null else it }
-            )
-            val pickerModifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp)
-            if (draft == null) when (shownPicker) {
-                HudItem.FOCAL -> PickerRow(
+        val hudLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+        // The picker for the tapped value: a row under the top bar in portrait, a column beside
+        // the side bar in landscape.
+        val pickerContent: @Composable (Modifier, Boolean) -> Unit = { pm, vertical ->
+            when (shownPicker) {
+                HudItem.FOCAL -> Box(
+                    Modifier.then(if (vertical) Modifier else Modifier.fillMaxWidth()),
+                    contentAlignment = if (vertical) Alignment.TopStart else Alignment.TopEnd
+                ) { PickerRow(
                     labels = facingLenses.map { "${it.equivFocalMm ?: "?"} mm" },
                     selectedIndex = facingLenses.indexOfFirst { it.key == lens?.key },
                     onSelect = { i ->
                         if (!capturing) selectedLensKey = facingLenses[i].key
                         openPicker = null
                     },
-                    modifier = pickerModifier.align(Alignment.End)
-                )
+                    modifier = pm,
+                    vertical = vertical
+                ) }
                 HudItem.SHUTTER -> PickerRow(
                     labels = listOf("AUTO") + shutterOptions.map { formatShutter(it) },
                     selectedIndex = if (exposure.shutterLocked) {
@@ -580,7 +580,8 @@ fun CameraScreen() {
                             }
                         }
                     },
-                    modifier = pickerModifier
+                    modifier = pm,
+                    vertical = vertical
                 )
                 HudItem.ISO -> PickerRow(
                     labels = listOf("AUTO") + isoOptions.map { "ISO $it" },
@@ -594,7 +595,8 @@ fun CameraScreen() {
                             }
                         }
                     },
-                    modifier = pickerModifier
+                    modifier = pm,
+                    vertical = vertical
                 )
                 HudItem.APERTURE -> {
                     val apertures = caps?.apertures.orEmpty()
@@ -604,14 +606,16 @@ fun CameraScreen() {
                         onSelect = { i ->
                             exposure = exposure.copy(aperture = if (i == 0) null else apertures[i - 1])
                         },
-                        modifier = pickerModifier
+                        modifier = pm,
+                    vertical = vertical
                     )
                 }
                 HudItem.EV -> PickerRow(
                     labels = EvOptions.map { formatEv(it) },
                     selectedIndex = EvOptions.indexOfFirst { kotlin.math.abs(it - evComp) < 0.05f },
                     onSelect = { i -> evComp = EvOptions[i] },
-                    modifier = pickerModifier
+                    modifier = pm,
+                    vertical = vertical
                 )
                 HudItem.RECIPE -> PickerRow(
                     // Stays open so looks can be compared live; the last entries are actions.
@@ -638,15 +642,14 @@ fun CameraScreen() {
                             }
                         }
                     },
-                    modifier = pickerModifier
+                    modifier = pm,
+                    vertical = vertical
                 )
                 null -> Unit
             }
-            if (draft == null) FlowRow(
-                modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+        }
+        // Flash, format, EV and recipe buttons.
+        val toggleButtons: @Composable () -> Unit = {
                 if (!resolvedExposure.manualSensor && bound?.camera?.cameraInfo?.hasFlashUnit() == true) {
                     FlashButton(setting = flash, onClick = { flash = flash.next() })
                 }
@@ -673,6 +676,57 @@ fun CameraScreen() {
                     open = shownPicker == HudItem.RECIPE,
                     onClick = { openPicker = if (shownPicker == HudItem.RECIPE) null else HudItem.RECIPE }
                 )
+        }
+        val hudBar: @Composable (Modifier, Boolean) -> Unit = { m, vertical ->
+            TelemetryHud(
+                telemetry = hud,
+                settings = resolvedExposure,
+                lensFocalMm = lens?.equivFocalMm,
+                pickable = pickable,
+                openItem = shownPicker,
+                onItemClick = { openPicker = if (shownPicker == it) null else it },
+                vertical = vertical,
+                modifier = m
+            )
+        }
+
+        if (hudLandscape) {
+            // Landscape: exposure values and buttons stacked in the left bar, clear of the image,
+            // mirroring the shutter column on the right.
+            Row(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxHeight()
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start + WindowInsetsSides.Vertical))
+                    .padding(start = 12.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    hudBar(Modifier, true)
+                    if (draft == null) {
+                        Spacer(Modifier.height(4.dp))
+                        toggleButtons()
+                    }
+                }
+                if (draft == null && shownPicker != null) {
+                    pickerContent(Modifier.padding(start = 10.dp).heightIn(max = 320.dp), true)
+                }
+            }
+        } else {
+            // Portrait: exposure bar across the top, its picker, then the buttons.
+            Column(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
+                hudBar(Modifier, false)
+                if (draft == null) pickerContent(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp), false)
+                if (draft == null) FlowRow(
+                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    toggleButtons()
+                }
             }
         }
 

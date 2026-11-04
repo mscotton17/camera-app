@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -164,6 +165,8 @@ fun TelemetryHud(
     pickable: Set<HudItem> = emptySet(),
     openItem: HudItem? = null,
     onItemClick: (HudItem) -> Unit = {},
+    /** Stack the values top to bottom, for the landscape side column. */
+    vertical: Boolean = false,
 ) {
     val shutterNs = settings.shutterNs
     val iso = settings.iso
@@ -183,6 +186,33 @@ fun TelemetryHud(
             false
         ),
     )
+    val itemContent: @Composable (HudItem, String, Boolean) -> Unit = { item, text, fixed ->
+        val color = if (fixed) Color.White else HudAmber
+        if (item in pickable) {
+            val open = item == openItem
+            val shape = RoundedCornerShape(50)
+            Box(
+                modifier = Modifier
+                    .clip(shape)
+                    .background(if (open) HudAmber.copy(alpha = 0.25f) else Color.Transparent)
+                    .border(1.dp, HudAmber.copy(alpha = if (open) 0f else 0.35f), shape)
+                    .clickable { onItemClick(item) }
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                    .semantics { contentDescription = "$text, tap to change" }
+            ) {
+                HudText(text, color = color)
+            }
+        } else {
+            HudText(text, Modifier.padding(horizontal = if (vertical) 7.dp else 0.dp, vertical = 5.dp), color = color)
+        }
+    }
+    if (vertical) {
+        // Landscape: one value per line in the side bar, clear of the image.
+        Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            items.forEach { (item, text, fixed) -> itemContent(item, text, fixed) }
+        }
+        return
+    }
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -205,24 +235,7 @@ fun TelemetryHud(
                             .background(HudAmber.copy(alpha = 0.4f))
                     )
                 }
-                val color = if (fixed) Color.White else HudAmber
-                if (item in pickable) {
-                    val open = item == openItem
-                    val shape = RoundedCornerShape(50)
-                    Box(
-                        modifier = Modifier
-                            .clip(shape)
-                            .background(if (open) HudAmber.copy(alpha = 0.25f) else Color.Transparent)
-                            .border(1.dp, HudAmber.copy(alpha = if (open) 0f else 0.35f), shape)
-                            .clickable { onItemClick(item) }
-                            .padding(horizontal = 6.dp, vertical = 4.dp)
-                            .semantics { contentDescription = "$text, tap to change" }
-                    ) {
-                        HudText(text, color = color)
-                    }
-                } else {
-                    HudText(text, Modifier.padding(vertical = 5.dp), color = color)
-                }
+                itemContent(item, text, fixed)
             }
         }
     }

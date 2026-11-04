@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -156,39 +157,56 @@ fun PickerRow(
     labels: List<String>,
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Stack the choices top to bottom (used beside the landscape side column). */
+    vertical: Boolean = false,
 ) {
     val listState = remember(labels) {
         LazyListState(firstVisibleItemIndex = (selectedIndex - 2).coerceAtLeast(0))
     }
-    LazyRow(
-        state = listState,
-        modifier = modifier
-            .clip(RoundedCornerShape(50))
-            .background(ControlBackground),
-        contentPadding = PaddingValues(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        itemsIndexed(labels) { i, label ->
-            val selected = i == selectedIndex
-            Box(
-                modifier = Modifier
-                    .height(36.dp)
-                    .widthIn(min = 56.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(if (selected) HudAmber.copy(alpha = 0.25f) else Color.Transparent)
-                    .clickable { onSelect(i) },
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = label,
-                    modifier = Modifier.padding(horizontal = 10.dp),
-                    color = if (selected) HudAmber else Color.White,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    maxLines = 1
-                )
-            }
+    val chip: @Composable (Int, String) -> Unit = { i, label ->
+        val selected = i == selectedIndex
+        Box(
+            modifier = Modifier
+                .height(36.dp)
+                .widthIn(min = 56.dp)
+                .clip(RoundedCornerShape(50))
+                .background(if (selected) HudAmber.copy(alpha = 0.25f) else Color.Transparent)
+                .clickable { onSelect(i) },
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = label,
+                modifier = Modifier.padding(horizontal = 10.dp),
+                color = if (selected) HudAmber else Color.White,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                maxLines = 1
+            )
+        }
+    }
+    if (vertical) {
+        LazyColumn(
+            state = listState,
+            modifier = modifier
+                .clip(RoundedCornerShape(18.dp))
+                .background(ControlBackground),
+            contentPadding = PaddingValues(4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            itemsIndexed(labels) { i, label -> chip(i, label) }
+        }
+    } else {
+        LazyRow(
+            state = listState,
+            modifier = modifier
+                .clip(RoundedCornerShape(50))
+                .background(ControlBackground),
+            contentPadding = PaddingValues(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            itemsIndexed(labels) { i, label -> chip(i, label) }
         }
     }
 }
