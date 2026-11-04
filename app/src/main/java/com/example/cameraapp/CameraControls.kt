@@ -34,6 +34,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
@@ -237,20 +239,29 @@ fun EvButton(ev: Float, open: Boolean, onClick: () -> Unit, modifier: Modifier =
 @Composable
 fun RecipeButton(recipe: FilmRecipe?, open: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val label = recipe?.label ?: "STD"
+    // Narrow enough to sit beside / under the shutter: long names wrap onto a second line
+    // (at the space where there is one), and the corners stay rounded either way.
+    val shape = RoundedCornerShape(16.dp)
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(50))
+            .widthIn(max = 100.dp)
+            .clip(shape)
             .background(if (open) HudAmber.copy(alpha = 0.25f) else ControlBackground)
-            .border(1.dp, ControlBorder.copy(alpha = 0.5f), RoundedCornerShape(50))
+            .border(1.dp, ControlBorder.copy(alpha = 0.5f), shape)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 7.dp)
-            .semantics { contentDescription = "Film recipe $label" }
+            .semantics { contentDescription = "Film recipe $label" },
+        contentAlignment = Alignment.Center
     ) {
         Text(
             text = label,
             color = if (recipe != null) HudAmber else Color.White,
             fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp
+            fontSize = 12.sp,
+            lineHeight = 14.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
         )
     }
 }
