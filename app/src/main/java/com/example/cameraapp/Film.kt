@@ -309,6 +309,21 @@ val FilmRecipes: List<FilmRecipe> = listOf(
         shadows = -0.065f, highlights = 0.045f,
         grain = 0.065f,
     ),
+    // Reggie's HP5: punchy black and white through a red filter — deep contrast, dark skies,
+    // fine organic grain that sits mostly in the shadows, 3:2 frame.
+    FilmRecipe(
+        id = "reggies_hp5", label = "REGGIE'S HP5",
+        mono = Triple(0.60f, 0.35f, 0.05f),
+        contrast = 0.15f, blackPoint = 0.005f, shadows = -0.055f, mids = 0.010f, highlights = 0.050f, whitePoint = 0.99f,
+        toe = 0.12f, shoulder = 0.35f, dynamicRange = DynamicRange.DR200,
+        sharpen = -0.15f,
+        clarity = 0.10f, clarityRadius = 0.9f,
+        vignette = 0.15f, vignetteFeather = 0.75f, vignetteRoundness = 1.0f,
+        grain = 0.025f, grainSize = 1.0f, grainColor = 0f, grainRoughness = 0.25f,
+        grainShadows = 1.1f, grainMids = 1.0f, grainHighlights = 0.2f,
+        aspect = AspectRatio.THREE_TWO,
+        whiteBalance = WhiteBalance.AUTO, defaultEvOn = true, defaultEv = 1f / 3f,
+    ),
     // Gritty street look: punchy micro-contrast, dense colour that holds saturated signs and
     // clothing without clipping, cool shadows, a strong vignette.
     FilmRecipe(
