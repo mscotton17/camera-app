@@ -31,9 +31,14 @@ data class Tint(val r: Float = 0f, val g: Float = 0f, val b: Float = 0f)
  *  3. Saturation / hue: per-primary saturation ([satR]/[satG]/[satB]) mutes or boosts each
  *     primary; [mono] replaces colour with a weighted channel mix (like a B&W filter).
  *  4. Grain: procedural luminance noise, strongest in the midtones like real film.
+ * Plus three in-camera "engine" controls:
+ *  - [colorChrome]: compresses and deepens highly saturated colours so they don't clip.
+ *  - [clarity]: midtone micro-contrast; negative = soft vintage glow, positive = punchy.
+ *  - [vignette]: soft radial edge darkening.
  *
- * Pillars 1 and 3 are linear and become a [ColorMatrix]; pillar 2 is a lookup table; grain is
- * added last. The same matrix + table drive the live preview shader and the capture pass.
+ * Processing order: colour matrix -> colour chrome -> tone curve -> clarity -> vignette -> grain.
+ * Pillars 1 and 3 are linear and become a [ColorMatrix]; pillar 2 is a lookup table. The same
+ * maths drives the live preview shader and the capture pass.
  */
 data class FilmRecipe(
     val id: String,
@@ -55,6 +60,12 @@ data class FilmRecipe(
     val highlightTint: Tint = Tint(),
     /** Grain strength at midtones, as a fraction of full scale (0.04 ≈ ±10 levels). */
     val grain: Float = 0f,
+    /** Radial edge darkening, 0..1 (1 = corners at ~25% brightness), softly feathered. */
+    val vignette: Float = 0f,
+    /** Midtone micro-contrast, -0.5..+0.5: negative softens/glows, positive adds punch. */
+    val clarity: Float = 0f,
+    /** 0..1: compresses and deepens highly saturated colours so they don't clip. */
+    val colorChrome: Float = 0f,
 ) {
     /** Linear part (white balance, per-primary saturation, mono mix) as an Android ColorMatrix. */
     val colorMatrix: ColorMatrix by lazy { buildColorMatrix(this) }
@@ -92,6 +103,15 @@ val FilmRecipes: List<FilmRecipe> = listOf(
         shadows = -0.065f, highlights = 0.045f,
         grain = 0.065f,
     ),
+    // Gritty street look: punchy micro-contrast, dense colour that holds saturated signs and
+    // clothing without clipping, cool shadows, a strong vignette. Exercises the engine controls.
+    FilmRecipe(
+        id = "street", label = "STREET",
+        satR = 1.08f, satG = 0.88f, satB = 1.02f,
+        shadows = -0.045f, highlights = 0.015f,
+        shadowTint = Tint(r = -0.01f, b = 0.01f),
+        grain = 0.035f, vignette = 0.35f, clarity = 0.35f, colorChrome = 0.7f,
+    ),
     // Saturated slide film: punchy colour and contrast, no grain.
     FilmRecipe(
         id = "vivid", label = "VIVID",
@@ -107,6 +127,85 @@ val FilmRecipes: List<FilmRecipe> = listOf(
 private const val LR = 0.2126f
 private const val LG = 0.7152f
 private const val LB = 0.0722f
+
+// Engine-control tuning, shared by the CPU pass and the preview shader (keep in sync).
+/** Clarity blur radius as a fraction of image width. */
+private const val CLARITY_RADIUS = 0.01f
+/** Detail gain at clarity = 1 (so ±0.5 doubles or halves local midtone contrast). */
+private const val CLARITY_GAIN = 2f
+/** Vignette starts this far out (fraction of the half-diagonal) and is darkest at the corners. */
+private const val VIGNETTE_START = 0.3f
+private const val VIGNETTE_DEPTH = 0.75f
+/** Colour chrome: chroma range over which it fades in, and how much it compresses/deepens. */
+private const val CHROME_LOW = 0.35f
+private const val CHROME_HIGH = 0.9f
+private const val CHROME_DESAT = 0.25f
+private const val CHROME_DEEPEN = 0.18f
+
+private fun smoothstep(e0: Float, e1: Float, x: Float): Float {
+    val t = ((x - e0) / (e1 - e0)).coerceIn(0f, 1f)
+    return t * t * (3f - 2f * t)
+}
+
+/**
+ * Low-resolution blurred luminance (0..1) of the original image, for clarity. Built once per
+ * photo at ~400px wide, so a small box blur equals a wide one at full resolution.
+ */
+private class BlurMap(source: Bitmap) {
+    val w: Int = min(source.width, 400)
+    val h: Int = max(1, (source.height * w / source.width.toFloat()).roundToInt())
+    private val data = FloatArray(w * h)
+    private val sx = (w - 1).toFloat() / max(1, source.width - 1)
+    private val sy = (h - 1).toFloat() / max(1, source.height - 1)
+
+    init {
+        val small = Bitmap.createScaledBitmap(source, w, h, true)
+        val px = IntArray(w * h)
+        small.getPixels(px, 0, w, 0, 0, w, h)
+        if (small !== source) small.recycle()
+        for (i in px.indices) {
+            val c = px[i]
+            data[i] = (LR * ((c shr 16) and 0xFF) + LG * ((c shr 8) and 0xFF) + LB * (c and 0xFF)) / 255f
+        }
+        val radius = max(1, (w * CLARITY_RADIUS).roundToInt())
+        // Two box passes in each direction approximate a Gaussian.
+        repeat(2) {
+            boxBlur(data, w, h, radius, horizontal = true)
+            boxBlur(data, w, h, radius, horizontal = false)
+        }
+    }
+
+    /** Bilinear sample at full-resolution pixel (x, y). */
+    fun sample(x: Int, y: Int): Float {
+        val fx = x * sx
+        val fy = y * sy
+        val x0 = fx.toInt().coerceIn(0, w - 1)
+        val y0 = fy.toInt().coerceIn(0, h - 1)
+        val x1 = min(x0 + 1, w - 1)
+        val y1 = min(y0 + 1, h - 1)
+        val tx = fx - x0
+        val ty = fy - y0
+        val top = data[y0 * w + x0] * (1 - tx) + data[y0 * w + x1] * tx
+        val bottom = data[y1 * w + x0] * (1 - tx) + data[y1 * w + x1] * tx
+        return top * (1 - ty) + bottom * ty
+    }
+
+    private fun boxBlur(a: FloatArray, w: Int, h: Int, r: Int, horizontal: Boolean) {
+        val lines = if (horizontal) h else w
+        val len = if (horizontal) w else h
+        val line = FloatArray(len)
+        for (l in 0 until lines) {
+            fun idx(i: Int) = if (horizontal) l * w + i else i * w + l
+            for (i in 0 until len) line[i] = a[idx(i)]
+            var sum = 0f
+            for (i in -r..r) sum += line[i.coerceIn(0, len - 1)]
+            for (i in 0 until len) {
+                a[idx(i)] = sum / (2 * r + 1)
+                sum += line[(i + r + 1).coerceAtMost(len - 1)] - line[(i - r).coerceAtLeast(0)]
+            }
+        }
+    }
+}
 
 private fun buildColorMatrix(r: FilmRecipe): ColorMatrix {
     // Rows of a 3x3 matrix, applied to (R, G, B).
@@ -218,6 +317,14 @@ fun applyRecipe(bitmap: Bitmap, recipe: FilmRecipe) {
     // Grain cells scale with the image so it looks the same at any resolution.
     val cell = max(1, (w / 2400f).roundToInt())
     val seed = (System.nanoTime() and 0x7FFFFFFF).toInt()
+    // Clarity compares each pixel with its surroundings in the original image.
+    val blurMap = if (recipe.clarity != 0f) BlurMap(bitmap) else null
+    val clarity = recipe.clarity * CLARITY_GAIN
+    val chrome = recipe.colorChrome
+    val vignette = recipe.vignette * VIGNETTE_DEPTH
+    val cx = (w - 1) / 2f
+    val cy = (h - 1) / 2f
+    val halfDiagonal = kotlin.math.sqrt(cx * cx + cy * cy).coerceAtLeast(1f)
 
     val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
     val band = (h + threads - 1) / threads
@@ -234,23 +341,52 @@ fun applyRecipe(bitmap: Bitmap, recipe: FilmRecipe) {
                     val r = ((c shr 16) and 0xFF).toFloat()
                     val g = ((c shr 8) and 0xFF).toFloat()
                     val b = (c and 0xFF).toFloat()
-                    // Pillars 1 + 3: colour matrix.
-                    val mr = (cm[0] * r + cm[1] * g + cm[2] * b + cm[4]).roundToInt().coerceIn(0, 255)
-                    val mg = (cm[5] * r + cm[6] * g + cm[7] * b + cm[9]).roundToInt().coerceIn(0, 255)
-                    val mb = (cm[10] * r + cm[11] * g + cm[12] * b + cm[14]).roundToInt().coerceIn(0, 255)
+                    // Pillars 1 + 3: colour matrix (kept unclamped so colour chrome sees the overshoot).
+                    var fr = cm[0] * r + cm[1] * g + cm[2] * b + cm[4]
+                    var fg = cm[5] * r + cm[6] * g + cm[7] * b + cm[9]
+                    var fb = cm[10] * r + cm[11] * g + cm[12] * b + cm[14]
+                    // Colour chrome: pull in and deepen highly saturated colours before they clip.
+                    if (chrome > 0f) {
+                        val chroma = (max(fr, max(fg, fb)) - min(fr, min(fg, fb))) / 255f
+                        val wgt = smoothstep(CHROME_LOW, CHROME_HIGH, chroma) * chrome
+                        if (wgt > 0f) {
+                            val l = LR * fr + LG * fg + LB * fb
+                            val keep = 1f - CHROME_DESAT * wgt
+                            val deepen = 1f - CHROME_DEEPEN * wgt
+                            fr = (l + (fr - l) * keep) * deepen
+                            fg = (l + (fg - l) * keep) * deepen
+                            fb = (l + (fb - l) * keep) * deepen
+                        }
+                    }
                     // Pillar 2: tone curves.
-                    var outR = lut[mr]
-                    var outG = lut[256 + mg]
-                    var outB = lut[512 + mb]
+                    var outR = lut[fr.roundToInt().coerceIn(0, 255)].toFloat()
+                    var outG = lut[256 + fg.roundToInt().coerceIn(0, 255)].toFloat()
+                    var outB = lut[512 + fb.roundToInt().coerceIn(0, 255)].toFloat()
+                    // Clarity: add (or remove) local detail, mostly in the midtones.
+                    if (blurMap != null) {
+                        val detail = (LR * r + LG * g + LB * b) / 255f - blurMap.sample(x, y)
+                        val l = (LR * outR + LG * outG + LB * outB) / 255f
+                        val d = clarity * detail * 4f * l * (1f - l) * 255f
+                        outR += d; outG += d; outB += d
+                    }
+                    // Vignette: soft radial darkening toward the corners.
+                    if (vignette > 0f) {
+                        val dx = x - cx
+                        val dy = y - cy
+                        val radius = kotlin.math.sqrt(dx * dx + dy * dy) / halfDiagonal
+                        val f = 1f - vignette * smoothstep(VIGNETTE_START, 1f, radius)
+                        outR *= f; outG *= f; outB *= f
+                    }
                     // Pillar 4: monochromatic grain, weighted toward the midtones.
                     if (grainLevels > 0f) {
-                        val l = (LR * outR + LG * outG + LB * outB) / 255f
-                        val d = (grainNoise(x / cell, y / cell, seed) * grainLevels * 4f * l * (1f - l)).roundToInt()
-                        outR = (outR + d).coerceIn(0, 255)
-                        outG = (outG + d).coerceIn(0, 255)
-                        outB = (outB + d).coerceIn(0, 255)
+                        val l = ((LR * outR + LG * outG + LB * outB) / 255f).coerceIn(0f, 1f)
+                        val d = grainNoise(x / cell, y / cell, seed) * grainLevels * 4f * l * (1f - l)
+                        outR += d; outG += d; outB += d
                     }
-                    row[x] = (c and 0xFF000000.toInt()) or (outR shl 16) or (outG shl 8) or outB
+                    val pr = outR.roundToInt().coerceIn(0, 255)
+                    val pg = outG.roundToInt().coerceIn(0, 255)
+                    val pb = outB.roundToInt().coerceIn(0, 255)
+                    row[x] = (c and 0xFF000000.toInt()) or (pr shl 16) or (pg shl 8) or pb
                 }
                 bitmap.setPixels(row, 0, w, 0, y, w, 1)
             }
@@ -314,23 +450,67 @@ uniform shader lut;
 uniform float3x3 cm;
 uniform float grainAmount;
 uniform float seed;
+uniform float vignette;     // already multiplied by VIGNETTE_DEPTH
+uniform float vignetteStart;
+uniform float clarity;      // already multiplied by CLARITY_GAIN
+uniform float clarityRadius;
+uniform float colorChrome;
+uniform float4 chromeParams; // low, high, desat, deepen
+uniform float4 frame;       // image rect inside the view: left, top, width, height (px)
+
+float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
 float hash(float2 p) {
     return fract(sin(dot(p, float2(12.9898, 78.233)) + seed) * 43758.5453);
 }
 
+float lumaAt(float2 p) {
+    // Stay inside the image so the black bars don't darken the blur at the edges.
+    float2 q = clamp(p, frame.xy, frame.xy + frame.zw - 1.0);
+    return luma(float3(content.eval(q).rgb));
+}
+
 half4 main(float2 p) {
     half4 c = content.eval(p);
-    float3 rgb = float3(c.rgb);
+    float3 src = float3(c.rgb);
     // Leave the black letterbox bars alone.
-    if (max(rgb.r, max(rgb.g, rgb.b)) < 0.004) return c;
-    rgb = clamp(cm * rgb, 0.0, 1.0);
+    if (max(src.r, max(src.g, src.b)) < 0.004) return c;
+
+    float3 rgb = cm * src;
+    if (colorChrome > 0.0) {
+        float chroma = max(rgb.r, max(rgb.g, rgb.b)) - min(rgb.r, min(rgb.g, rgb.b));
+        float w = smoothstep(chromeParams.x, chromeParams.y, chroma) * colorChrome;
+        float l = luma(rgb);
+        rgb = (l + (rgb - l) * (1.0 - chromeParams.z * w)) * (1.0 - chromeParams.w * w);
+    }
+    rgb = clamp(rgb, 0.0, 1.0);
     rgb = float3(
         lut.eval(float2(rgb.r * 255.0 + 0.5, 0.5)).r,
         lut.eval(float2(rgb.g * 255.0 + 0.5, 0.5)).g,
         lut.eval(float2(rgb.b * 255.0 + 0.5, 0.5)).b);
+
+    if (clarity != 0.0) {
+        // 12-tap ring blur (radius and half radius) approximates the capture's blur map.
+        float r = frame.z * clarityRadius;
+        float blur = 0.0;
+        for (int i = 0; i < 6; i++) {
+            float a = float(i) * 1.0471976;
+            blur += lumaAt(p + float2(cos(a), sin(a)) * r);
+            blur += lumaAt(p + float2(cos(a + 0.5235988), sin(a + 0.5235988)) * r * 0.5);
+        }
+        float detail = luma(src) - blur / 12.0;
+        float l = luma(rgb);
+        rgb += clarity * detail * 4.0 * l * (1.0 - l);
+    }
+
+    if (vignette > 0.0) {
+        float2 center = frame.xy + frame.zw * 0.5;
+        float radius = length(p - center) / (0.5 * length(frame.zw));
+        rgb *= 1.0 - vignette * smoothstep(vignetteStart, 1.0, radius);
+    }
+
     if (grainAmount > 0.0) {
-        float l = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+        float l = clamp(luma(rgb), 0.0, 1.0);
         rgb += (hash(floor(p)) * 2.0 - 1.0) * grainAmount * 4.0 * l * (1.0 - l);
     }
     return half4(half3(clamp(rgb, 0.0, 1.0)), c.a);
@@ -357,10 +537,22 @@ class FilmPreviewShader(recipe: FilmRecipe) {
         shader.setInputShader("lut", BitmapShader(lutBitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP))
         shader.setFloatUniform("grainAmount", recipe.grain)
         shader.setFloatUniform("seed", 0f)
+        shader.setFloatUniform("vignette", recipe.vignette * VIGNETTE_DEPTH)
+        shader.setFloatUniform("vignetteStart", VIGNETTE_START)
+        shader.setFloatUniform("clarity", recipe.clarity * CLARITY_GAIN)
+        shader.setFloatUniform("clarityRadius", CLARITY_RADIUS)
+        shader.setFloatUniform("colorChrome", recipe.colorChrome)
+        shader.setFloatUniform("chromeParams", CHROME_LOW, CHROME_HIGH, CHROME_DESAT, CHROME_DEEPEN)
+        shader.setFloatUniform("frame", 0f, 0f, 1f, 1f)
     }
 
-    fun effect(seed: Float): RenderEffect {
+    /**
+     * Effect for the current frame. [frameLeft]..[frameHeight] locate the camera image inside
+     * the preview view (it's letterboxed), so vignette and clarity follow the image.
+     */
+    fun effect(seed: Float, frameLeft: Float, frameTop: Float, frameWidth: Float, frameHeight: Float): RenderEffect {
         shader.setFloatUniform("seed", seed)
+        shader.setFloatUniform("frame", frameLeft, frameTop, frameWidth, frameHeight)
         return RenderEffect.createRuntimeShaderEffect(shader, "content")
     }
 }

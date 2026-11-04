@@ -309,7 +309,16 @@ fun CameraScreen() {
                 .graphicsLayer {
                     // Reading grainSeed here only redraws this layer, not the whole screen.
                     renderEffect = when {
-                        filmShader != null -> filmShader.effect(grainSeed).asComposeRenderEffect()
+                        filmShader != null -> {
+                            // Where the 4:3 image sits inside the letterboxed view.
+                            val ratio = if (size.height > size.width) 3f / 4f else 4f / 3f
+                            val frameW = min(size.width, size.height * ratio)
+                            val frameH = frameW / ratio
+                            filmShader.effect(
+                                grainSeed,
+                                (size.width - frameW) / 2f, (size.height - frameH) / 2f, frameW, frameH
+                            ).asComposeRenderEffect()
+                        }
                         recipe != null && Build.VERSION.SDK_INT >= 31 ->
                             filmColorFilterEffect(recipe).asComposeRenderEffect()
                         else -> null
