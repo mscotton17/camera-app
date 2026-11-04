@@ -17,15 +17,21 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,25 +66,34 @@ fun CameraScreen() {
             .build()
     }
     var capturing by remember { mutableStateOf(false) }
+    var lensFacing by rememberSaveable { mutableIntStateOf(CameraSelector.LENS_FACING_BACK) }
+    var canSwitchCamera by remember { mutableStateOf(false) }
 
-    // Bind Preview + ImageCapture to the lifecycle; unbind when this composable leaves.
-    DisposableEffect(lifecycleOwner) {
+    // Bind Preview + ImageCapture to the lifecycle; rebinds whenever lensFacing changes
+    // and unbinds when this composable leaves.
+    DisposableEffect(lifecycleOwner, lensFacing) {
         val providerFuture = ProcessCameraProvider.getInstance(context)
         var provider: ProcessCameraProvider? = null
         providerFuture.addListener({
             val cameraProvider = providerFuture.get()
             provider = cameraProvider
+            val hasBack = cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)
+            val hasFront = cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)
+            canSwitchCamera = hasBack && hasFront
+
+            // Fall back to whichever camera exists if the requested one doesn't.
+            val selector = when {
+                lensFacing == CameraSelector.LENS_FACING_FRONT && hasFront ->
+                    CameraSelector.DEFAULT_FRONT_CAMERA
+                hasBack -> CameraSelector.DEFAULT_BACK_CAMERA
+                else -> CameraSelector.DEFAULT_FRONT_CAMERA
+            }
             val preview = Preview.Builder().build().also {
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
             try {
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
-                    lifecycleOwner,
-                    CameraSelector.DEFAULT_BACK_CAMERA,
-                    preview,
-                    imageCapture
-                )
+                cameraProvider.bindToLifecycle(lifecycleOwner, selector, preview, imageCapture)
             } catch (e: Exception) {
                 Log.e(TAG, "Use case binding failed", e)
             }
@@ -90,16 +105,58 @@ fun CameraScreen() {
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
 
-        ShutterButton(
-            enabled = !capturing,
-            onClick = {
-                capturing = true
-                takePhoto(context, imageCapture) { capturing = false }
-            },
+        Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .fillMaxWidth()
                 .navigationBarsPadding()
                 .padding(bottom = 32.dp)
+        ) {
+            ShutterButton(
+                enabled = !capturing,
+                onClick = {
+                    capturing = true
+                    val mirror = lensFacing == CameraSelector.LENS_FACING_FRONT
+                    takePhoto(context, imageCapture, mirror) { capturing = false }
+                },
+                modifier = Modifier.align(Alignment.Center)
+            )
+            if (canSwitchCamera) {
+                SwitchCameraButton(
+                    enabled = !capturing,
+                    onClick = {
+                        lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
+                            CameraSelector.LENS_FACING_FRONT
+                        } else {
+                            CameraSelector.LENS_FACING_BACK
+                        }
+                    },
+                    // Centered in the space between the shutter (80dp) and the right edge.
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 40.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun SwitchCameraButton(enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(52.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.4f))
+            .border(1.5.dp, Color.White.copy(alpha = 0.8f), CircleShape)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Refresh,
+            contentDescription = "Switch camera",
+            tint = Color.White,
+            modifier = Modifier.size(28.dp)
         )
     }
 }
@@ -118,7 +175,12 @@ fun ShutterButton(enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Mo
     )
 }
 
-private fun takePhoto(context: Context, imageCapture: ImageCapture, onDone: () -> Unit) {
+private fun takePhoto(
+    context: Context,
+    imageCapture: ImageCapture,
+    mirror: Boolean,
+    onDone: () -> Unit
+) {
     val name = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.US)
         .format(System.currentTimeMillis())
     val contentValues = ContentValues().apply {
@@ -132,7 +194,10 @@ private fun takePhoto(context: Context, imageCapture: ImageCapture, onDone: () -
         context.contentResolver,
         MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
         contentValues
-    ).build()
+    )
+        // Front-camera preview is mirrored; mirror the saved photo too so it matches.
+        .setMetadata(ImageCapture.Metadata().apply { isReversedHorizontal = mirror })
+        .build()
 
     imageCapture.takePicture(
         outputOptions,
