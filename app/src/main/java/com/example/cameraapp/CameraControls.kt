@@ -1,13 +1,11 @@
 package com.example.cameraapp
 
 import androidx.camera.core.ImageCapture
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.height
@@ -22,10 +20,6 @@ import androidx.compose.material.icons.materialPath
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -147,24 +141,22 @@ fun FormatButton(format: CaptureFormat, onClick: () -> Unit, modifier: Modifier 
     }
 }
 
-/**
- * Lens picker. Collapsed, it shows only the current focal length (35mm equivalent); tapping it
- * reveals every lens facing the current direction, and picking one collapses it again.
- */
+/** Lens options (35mm-equivalent focal lengths) shown when the HUD focal length is tapped. */
 @Composable
-fun LensSelector(
+fun LensOptions(
     lenses: List<Lens>,
     selectedKey: String?,
-    vertical: Boolean,
     onSelect: (Lens) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Collapse whenever the available lenses change (e.g. switching front/back).
-    var expanded by remember(lenses) { mutableStateOf(false) }
-    val shown = if (expanded) lenses else lenses.filter { it.key == selectedKey }
-
-    val chips: @Composable () -> Unit = {
-        shown.forEach { lens ->
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(50))
+            .background(ControlBackground)
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        lenses.forEach { lens ->
             val selected = lens.key == selectedKey
             Box(
                 modifier = Modifier
@@ -172,21 +164,8 @@ fun LensSelector(
                     .widthIn(min = 56.dp)
                     .clip(RoundedCornerShape(50))
                     .background(if (selected) HudAmber.copy(alpha = 0.25f) else Color.Transparent)
-                    .clickable {
-                        if (expanded) {
-                            if (!selected) onSelect(lens)
-                            expanded = false
-                        } else {
-                            expanded = true
-                        }
-                    }
-                    .semantics {
-                        contentDescription = if (expanded) {
-                            "${lens.equivFocalMm ?: "Unknown"} millimetre lens"
-                        } else {
-                            "Current lens ${lens.equivFocalMm ?: "unknown"} millimetres, tap to change"
-                        }
-                    },
+                    .clickable { onSelect(lens) }
+                    .semantics { contentDescription = "${lens.equivFocalMm ?: "Unknown"} millimetre lens" },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -198,15 +177,5 @@ fun LensSelector(
                 )
             }
         }
-    }
-    val container = modifier
-        .animateContentSize()
-        .clip(RoundedCornerShape(50))
-        .background(ControlBackground)
-        .padding(4.dp)
-    if (vertical) {
-        Column(container, verticalArrangement = Arrangement.spacedBy(4.dp)) { chips() }
-    } else {
-        Row(container, horizontalArrangement = Arrangement.spacedBy(4.dp)) { chips() }
     }
 }

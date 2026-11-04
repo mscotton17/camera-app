@@ -12,6 +12,11 @@ import android.os.SystemClock
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.core.Preview
 import androidx.compose.foundation.background
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -141,15 +146,27 @@ fun Preview.Builder.attachTelemetry(tracker: TelemetryTracker): Preview.Builder 
     return this
 }
 
-/** Retro mirrorless-style OSD bar: f/1.8  |  1/250s  |  ISO 100  |  24mm (35mm equivalent) */
+/**
+ * Retro mirrorless-style OSD bar: f/1.8  |  1/250s  |  ISO 100  |  24mm (35mm equivalent).
+ * When [focalPickable], the focal length is a button (marked with a caret) that toggles the
+ * lens picker via [onFocalClick].
+ */
 @Composable
-fun TelemetryHud(telemetry: CameraTelemetry, modifier: Modifier = Modifier) {
-    val items = listOf(
+fun TelemetryHud(
+    telemetry: CameraTelemetry,
+    modifier: Modifier = Modifier,
+    lensFocalMm: Int? = null,
+    focalPickable: Boolean = false,
+    focalOpen: Boolean = false,
+    onFocalClick: () -> Unit = {},
+) {
+    val values = listOf(
         formatAperture(telemetry.apertureF),
         formatShutter(telemetry.exposureTimeNs),
         formatIso(telemetry.iso),
-        // Prefer the 35mm equivalent; fall back to the physical focal length.
-        formatFocalLength(telemetry.focalLength35mm ?: telemetry.focalLengthMm),
+        // The selected lens's focal length so it matches the picker; otherwise live values.
+        lensFocalMm?.let { "${it}mm" }
+            ?: formatFocalLength(telemetry.focalLength35mm ?: telemetry.focalLengthMm),
     )
     Box(
         modifier = modifier
@@ -160,11 +177,11 @@ fun TelemetryHud(telemetry: CameraTelemetry, modifier: Modifier = Modifier) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            items.forEachIndexed { i, text ->
+            values.forEachIndexed { i, text ->
                 if (i > 0) {
                     Box(
                         Modifier
@@ -173,15 +190,35 @@ fun TelemetryHud(telemetry: CameraTelemetry, modifier: Modifier = Modifier) {
                             .background(HudAmber.copy(alpha = 0.4f))
                     )
                 }
-                Text(
-                    text = text,
-                    color = HudAmber,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
-                    letterSpacing = 0.5.sp,
-                    maxLines = 1
-                )
+                val isFocal = i == values.lastIndex
+                if (isFocal && focalPickable) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(if (focalOpen) HudAmber.copy(alpha = 0.25f) else Color.Transparent)
+                            .clickable(onClick = onFocalClick)
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                            .semantics { contentDescription = "Lens $text, tap to change" }
+                    ) {
+                        HudText(text + if (focalOpen) " \u25B4" else " \u25BE")
+                    }
+                } else {
+                    HudText(text, Modifier.padding(vertical = 4.dp))
+                }
             }
         }
     }
+}
+
+@Composable
+private fun HudText(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = text,
+        modifier = modifier,
+        color = HudAmber,
+        fontFamily = FontFamily.Monospace,
+        fontSize = 13.sp,
+        letterSpacing = 0.5.sp,
+        maxLines = 1
+    )
 }

@@ -117,6 +117,7 @@ fun CameraScreen() {
     var flash by rememberSaveable { mutableStateOf(FlashSetting.AUTO) }
     var bound by remember { mutableStateOf<BoundCamera?>(null) }
     var capturing by remember { mutableStateOf(false) }
+    var lensPickerOpen by remember { mutableStateOf(false) }
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
     var focusKey by remember { mutableIntStateOf(0) }
     val focusScale = remember { Animatable(1f) }
@@ -261,9 +262,31 @@ fun CameraScreen() {
             )
         }
 
-        // Top: exposure OSD, with flash and format toggles beneath it.
+        val facingLenses = lens?.let { l -> lensSet?.forFacing(l.facing) }.orEmpty()
+        val canPickLens = facingLenses.size > 1
+
+        // Top: exposure OSD (tap the focal length to pick a lens), then flash/format toggles.
         Column(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
-            TelemetryHud(hud)
+            TelemetryHud(
+                telemetry = hud,
+                lensFocalMm = lens?.equivFocalMm,
+                focalPickable = canPickLens,
+                focalOpen = lensPickerOpen && canPickLens,
+                onFocalClick = { lensPickerOpen = !lensPickerOpen }
+            )
+            if (lensPickerOpen && canPickLens) {
+                LensOptions(
+                    lenses = facingLenses,
+                    selectedKey = lens?.key,
+                    onSelect = {
+                        if (!capturing) selectedLensKey = it.key
+                        lensPickerOpen = false
+                    },
+                    modifier = Modifier
+                        .align(Alignment.End)
+                        .padding(end = 12.dp, top = 8.dp)
+                )
+            }
             Row(
                 modifier = Modifier.padding(start = 12.dp, top = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -277,17 +300,6 @@ fun CameraScreen() {
             }
         }
 
-        val facingLenses = lens?.let { l -> lensSet?.forFacing(l.facing) }.orEmpty()
-        val lensSelector: @Composable (Boolean) -> Unit = { vertical ->
-            if (facingLenses.size > 1) {
-                LensSelector(
-                    lenses = facingLenses,
-                    selectedKey = lens?.key,
-                    vertical = vertical,
-                    onSelect = { if (!capturing) selectedLensKey = it.key }
-                )
-            }
-        }
         val shutterButton: @Composable (Modifier) -> Unit = { m ->
             ShutterButton(
                 enabled = !capturing && bound != null,
@@ -318,6 +330,7 @@ fun CameraScreen() {
                             CameraSelector.LENS_FACING_BACK
                         }
                         selectedLensKey = set.defaultFor(other)?.key
+                        lensPickerOpen = false
                     },
                     modifier = m
                 )
@@ -329,8 +342,7 @@ fun CameraScreen() {
         val isLandscape =
             LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
         if (isLandscape) {
-            // Landscape: controls stacked on the right edge, shutter centred under the thumb,
-            // lens selector just inside it (toward the image).
+            // Landscape: controls stacked on the right edge, shutter centred under the thumb.
             Row(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
@@ -341,8 +353,6 @@ fun CameraScreen() {
                     .padding(end = 24.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                lensSelector(true)
-                Spacer(Modifier.width(16.dp))
                 Column(
                     verticalArrangement = Arrangement.spacedBy(40.dp, Alignment.CenterVertically),
                     horizontalAlignment = Alignment.CenterHorizontally
@@ -354,7 +364,7 @@ fun CameraScreen() {
                 }
             }
         } else {
-            // Portrait: lens selector, then shutter / switch row along the bottom.
+            // Portrait: shutter / switch row along the bottom.
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -363,10 +373,6 @@ fun CameraScreen() {
                     .padding(bottom = 32.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                if (facingLenses.size > 1) {
-                    lensSelector(false)
-                    Spacer(Modifier.height(16.dp))
-                }
                 Box(modifier = Modifier.fillMaxWidth()) {
                     shutterButton(Modifier.align(Alignment.Center))
                     switchButton(Modifier.align(Alignment.CenterEnd).padding(end = 40.dp))
