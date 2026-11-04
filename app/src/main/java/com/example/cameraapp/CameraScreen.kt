@@ -141,8 +141,8 @@ fun CameraScreen() {
                 currentPreview[0]?.targetRotation = display.rotation
             }
         }
-        displayManager.registerListener(listener, Handler(Looper.getMainLooper()))
-        onDispose { displayManager.unregisterListener(listener) }
+        displayManager.registerDisplayListener(listener, Handler(Looper.getMainLooper()))
+        onDispose { displayManager.unregisterDisplayListener(listener) }
     }
     val hud by telemetry.state
 
