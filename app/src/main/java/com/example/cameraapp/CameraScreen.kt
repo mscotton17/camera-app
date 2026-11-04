@@ -186,7 +186,9 @@ fun CameraScreen() {
     var luts by remember { mutableStateOf(CubeLuts.list(context)) }
     // Selected recipe (null = standard). Kept while the app runs.
     var recipeId by rememberSaveable { mutableStateOf<String?>(null) }
-    val selectedRecipe = allRecipes.firstOrNull { it.id == recipeId }
+    // There's no "no recipe" option: if nothing (or a deleted recipe) is selected, the first
+    // recipe in the list is used.
+    val selectedRecipe = allRecipes.firstOrNull { it.id == recipeId } ?: allRecipes.firstOrNull()
     // Recipe open in the editor, if any; the preview shows it live while editing.
     var draft by remember { mutableStateOf<FilmRecipe?>(null) }
     val recipe = draft ?: selectedRecipe
