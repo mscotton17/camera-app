@@ -7,6 +7,8 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.Animatable
@@ -55,9 +57,25 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 private const val TAG = "CameraScreen"
+
+/** Preview and capture both use the sensor's native 4:3 so the viewfinder shows the exact frame. */
+private val FourByThree = ResolutionSelector.Builder()
+    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+    .build()
+
+/** True if [p] lies inside the 4:3 image letterboxed (FIT_CENTER) within a [w]x[h] view. */
+private fun insidePreviewFrame(w: Float, h: Float, p: Offset): Boolean {
+    val ratio = if (h > w) 3f / 4f else 4f / 3f // width / height of the visible image
+    val frameW = min(w, h * ratio)
+    val frameH = frameW / ratio
+    val left = (w - frameW) / 2f
+    val top = (h - frameH) / 2f
+    return p.x in left..(left + frameW) && p.y in top..(top + frameH)
+}
 
 @Composable
 fun CameraScreen() {
@@ -66,13 +84,14 @@ fun CameraScreen() {
 
     val previewView = remember {
         PreviewView(context).apply {
-            scaleType = PreviewView.ScaleType.FILL_CENTER
+            scaleType = PreviewView.ScaleType.FIT_CENTER
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
     }
     val imageCapture = remember {
         ImageCapture.Builder()
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            .setResolutionSelector(FourByThree)
             .build()
     }
     val telemetry = remember { TelemetryTracker() }
@@ -134,6 +153,7 @@ fun CameraScreen() {
                 else -> CameraSelector.DEFAULT_FRONT_CAMERA
             }
             val preview = Preview.Builder()
+                .setResolutionSelector(FourByThree)
                 .attachTelemetry(telemetry)
                 .build()
                 .also { it.setSurfaceProvider(previewView.surfaceProvider) }
@@ -176,6 +196,10 @@ fun CameraScreen() {
                 .pointerInput(camera) {
                     detectTapGestures { offset ->
                         val cam = camera ?: return@detectTapGestures
+                        // Ignore taps on the black bars around the image.
+                        if (!insidePreviewFrame(size.width.toFloat(), size.height.toFloat(), offset)) {
+                            return@detectTapGestures
+                        }
                         val point = previewView.meteringPointFactory.createPoint(offset.x, offset.y)
                         val action = FocusMeteringAction.Builder(
                             point,
