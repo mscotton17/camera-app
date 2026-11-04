@@ -19,6 +19,26 @@ private val ShutterStopsNs: List<Long> =
     listOf(1_000_000_000L) + listOf(2, 4, 8, 15, 30, 60, 125, 250, 500, 1000, 2000, 4000, 8000)
         .map { 1_000_000_000L / it }
 
+/** Exposure compensation choices: -3 to +3 EV in 1/3 stops. */
+val EvOptions: List<Float> = (-9..9).map { it / 3f }
+
+/** "+0.7", "-1.3", or "±0.0". */
+fun formatEv(ev: Float): String =
+    if (abs(ev) < 0.05f) "\u00B10.0" else String.format(java.util.Locale.US, "%+.1f", ev)
+
+/**
+ * Applies [ev] through the camera's own auto-exposure compensation, rounded to its step size.
+ * Only meaningful while auto-exposure is on.
+ */
+fun applyAeCompensation(camera: Camera, ev: Float) {
+    val state = camera.cameraInfo.exposureState
+    if (!state.isExposureCompensationSupported) return
+    val step = state.exposureCompensationStep.toFloat()
+    if (step <= 0f) return
+    val index = state.exposureCompensationRange.clamp((ev / step).roundToInt())
+    camera.cameraControl.setExposureCompensationIndex(index)
+}
+
 /** Longest shutter the app picks by itself in ISO priority, to keep the viewfinder usable. */
 private const val AUTO_SHUTTER_MAX_NS = 1_000_000_000L / 8
 
@@ -97,11 +117,13 @@ data class ExposureSettings(
      * One step of the app's own metering in priority modes: moves the unlocked value toward
      * [TARGET_LUMA] given the preview's mean brightness [meanLuma] (0..1).
      */
-    fun meteredStep(meanLuma: Float, caps: ExposureCaps): ExposureSettings {
+    fun meteredStep(meanLuma: Float, caps: ExposureCaps, evComp: Float = 0f): ExposureSettings {
         val ns = shutterNs ?: return this
         val sensitivity = iso ?: return this
         if (!priorityMode) return this
-        val errorEv = log2(TARGET_LUMA / meanLuma.coerceIn(0.01f, 0.99f))
+        // The preview is gamma-encoded (~2.2), so a shift of N stops moves mean luma by 2^(N/2.2).
+        val target = (TARGET_LUMA * 2.0.pow(evComp / 2.2).toFloat()).coerceIn(0.05f, 0.95f)
+        val errorEv = log2(target / meanLuma.coerceIn(0.01f, 0.99f))
         if (abs(errorEv) < 0.15f) return this
         // Damped so it settles smoothly; limited per step because a clipped frame
         // under-reports how far off it is.

@@ -35,6 +35,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.abs
 
 private val ControlBackground = Color.Black.copy(alpha = 0.4f)
 private val ControlBorder = Color.White.copy(alpha = 0.8f)
@@ -189,5 +190,27 @@ fun PickerRow(
                 )
             }
         }
+    }
+}
+
+/** Exposure compensation pill; amber when not at zero, highlighted while its picker is open. */
+@Composable
+fun EvButton(ev: Float, open: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val active = abs(ev) >= 0.05f
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (open) HudAmber.copy(alpha = 0.25f) else ControlBackground)
+            .border(1.dp, ControlBorder.copy(alpha = 0.5f), RoundedCornerShape(50))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 7.dp)
+            .semantics { contentDescription = "Exposure compensation ${formatEv(ev)}" }
+    ) {
+        Text(
+            text = "${formatEv(ev)} EV",
+            color = if (active) HudAmber else Color.White,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp
+        )
     }
 }

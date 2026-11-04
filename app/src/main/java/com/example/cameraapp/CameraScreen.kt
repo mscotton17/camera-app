@@ -46,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -123,6 +124,8 @@ fun CameraScreen() {
     var openPicker by remember { mutableStateOf<HudItem?>(null) }
     // Not saved: exposure is automatic every time the app opens.
     var exposure by remember { mutableStateOf(ExposureSettings()) }
+    // Exposure compensation in EV; also resets to 0 on launch.
+    var evComp by remember { mutableFloatStateOf(0f) }
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
     var focusKey by remember { mutableIntStateOf(0) }
     val focusScale = remember { Animatable(1f) }
@@ -167,6 +170,12 @@ fun CameraScreen() {
     val resolvedExposure = lens?.let { exposure.resolvedFor(it.exposure) } ?: ExposureSettings()
     LaunchedEffect(bound, resolvedExposure) { bound?.camera?.let { applyExposure(it, resolvedExposure) } }
 
+    // In full auto, EV compensation goes through the camera's own auto-exposure.
+    LaunchedEffect(bound, evComp, resolvedExposure.manualSensor) {
+        val cam = bound?.camera ?: return@LaunchedEffect
+        if (!resolvedExposure.manualSensor) applyAeCompensation(cam, evComp)
+    }
+
     // Shutter/ISO priority: the camera can't auto-adjust just one of them, so meter the preview
     // ourselves a few times a second and nudge the unlocked value.
     LaunchedEffect(bound, resolvedExposure.priorityMode, lens?.key) {
@@ -178,7 +187,7 @@ fun CameraScreen() {
             delay(max(250L, frameMs * 3))
             if (capturing) continue
             val luma = previewView.bitmap?.let { meanLuma(it) } ?: continue
-            val next = exposure.resolvedFor(caps).meteredStep(luma, caps)
+            val next = exposure.resolvedFor(caps).meteredStep(luma, caps, evComp)
             if (next != exposure) exposure = next
         }
     }
@@ -302,6 +311,8 @@ fun CameraScreen() {
             if (caps?.manualSensor == true && shutterOptions.isNotEmpty()) add(HudItem.SHUTTER)
             if (caps?.manualSensor == true && isoOptions.isNotEmpty()) add(HudItem.ISO)
             if (caps?.variableAperture == true) add(HudItem.APERTURE)
+            // Compensation needs something metering: hidden in full manual.
+            if (!(resolvedExposure.shutterLocked && resolvedExposure.isoLocked)) add(HudItem.EV)
         }
         val shownPicker = openPicker?.takeIf { it in pickable }
 
@@ -369,6 +380,12 @@ fun CameraScreen() {
                         modifier = pickerModifier
                     )
                 }
+                HudItem.EV -> PickerRow(
+                    labels = EvOptions.map { formatEv(it) },
+                    selectedIndex = EvOptions.indexOfFirst { kotlin.math.abs(it - evComp) < 0.05f },
+                    onSelect = { i -> evComp = EvOptions[i] },
+                    modifier = pickerModifier
+                )
                 null -> Unit
             }
             Row(
@@ -380,6 +397,13 @@ fun CameraScreen() {
                 }
                 if (lens != null && ImageCapture.OUTPUT_FORMAT_RAW in lens.supportedFormats) {
                     FormatButton(format = activeFormat, onClick = { format = activeFormat.nextFor(lens) })
+                }
+                if (HudItem.EV in pickable) {
+                    EvButton(
+                        ev = evComp,
+                        open = shownPicker == HudItem.EV,
+                        onClick = { openPicker = if (shownPicker == HudItem.EV) null else HudItem.EV }
+                    )
                 }
             }
         }
