@@ -160,7 +160,17 @@ fun CameraScreen() {
 
     // Live film preview: GPU shader on Android 13+, colour matrix only on Android 12.
     val filmShader = remember(recipe) {
-        if (recipe != null && Build.VERSION.SDK_INT >= 33) FilmPreviewShader(recipe) else null
+        if (recipe != null && Build.VERSION.SDK_INT >= 33) {
+            // AGSL is compiled on the device; fall back to the colour-matrix preview if it fails.
+            try {
+                FilmPreviewShader(recipe)
+            } catch (e: Exception) {
+                Log.e(TAG, "Film preview shader unavailable", e)
+                null
+            }
+        } else {
+            null
+        }
     }
     var grainSeed by remember { mutableFloatStateOf(0f) }
     LaunchedEffect(filmShader) {
