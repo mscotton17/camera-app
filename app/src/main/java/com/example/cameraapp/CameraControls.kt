@@ -56,6 +56,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 
+/** Light blue for the shutter button's inner disc. */
+private val ShutterBlue = Color(0xFF9FD3FF)
 private val ControlBackground = Color.Black.copy(alpha = 0.4f)
 private val ControlBorder = Color.White.copy(alpha = 0.8f)
 
@@ -167,7 +169,7 @@ fun ShutterButton(
                     scaleY = discScale
                 }
                 .clip(CircleShape)
-                .background(if (enabled || busy) Color.White else Color.Gray)
+                .background(if (enabled || busy) ShutterBlue else ShutterBlue.copy(alpha = 0.4f))
         )
     }
 }
