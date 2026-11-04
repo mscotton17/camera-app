@@ -72,6 +72,9 @@ uniform float grainCellFraction;
 uniform float grainColor;
 uniform float grainBoost;
 uniform float grainRough;
+uniform float grainColorBias;
+uniform float3 grainDirS;       // colour-grain tint direction in shadows (zero-sum, max 1)
+uniform float3 grainDirM;       // ... and in the mids
 uniform float3 grainTone;       // shadows, mids, highlights
 
 float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
@@ -190,9 +193,11 @@ half4 main(float2 p) {
     float3 rgb = cm * src;
 
     // 2. Colour chrome.
+    float chromeW = 0.0;
     if (colorChrome > 0.0) {
         float chroma = max(rgb.r, max(rgb.g, rgb.b)) - min(rgb.r, min(rgb.g, rgb.b));
         float w = smoothstep(chromeParams.x, chromeParams.y, chroma) * colorChrome;
+        chromeW = w;
         float l = luma(rgb);
         rgb = (l + (rgb - l) * (1.0 - chromeParams.z * w)) * (1.0 - chromeParams.w * w);
     }
@@ -205,8 +210,9 @@ half4 main(float2 p) {
         float k = 1.0 + tonalSat.x * smoothstep(0.55, 1.0, hsv.z) + tonalSat.y * (1.0 - smoothstep(0.0, 0.45, hsv.z));
         hsv.y = clamp(hsv.y * k, 0.0, 1.0);
         if (chromeBlue > 0.0) {
+            // Eased toward cyan, and only what colour chrome hasn't already done.
             float4 wB0 = bandWeights(hsv.x, hslCenterB, hslRightB, hslLeftB);
-            float w = wB0.y * smoothstep(0.35, 0.8, hsv.y) * chromeBlue;
+            float w = smoothstep(0.25, 1.0, wB0.y) * smoothstep(0.35, 0.8, hsv.y) * chromeBlue * (1.0 - chromeW);
             hsv.y *= 1.0 - 0.2 * w;
             hsv.z *= 1.0 - 0.22 * w;
         }
@@ -347,11 +353,17 @@ half4 main(float2 p) {
         float n = noise01(p, float2(0.0, 0.0)) * 2.0 - 1.0;
         float3 g = float3(n);
         if (grainColor > 0.0) {
+            // Random per-channel noise blended with noise along the tint direction (dye
+            // clouds); colour grain fades out of the highlights.
             float3 cn = float3(
                 noise01(p, float2(17.0, 3.0)),
                 noise01(p, float2(5.0, 29.0)),
                 noise01(p, float2(41.0, 11.0))) * 2.0 - 1.0;
-            g = mix(g, cn, grainColor);
+            float ws = 1.0 - smoothstep(0.2, 0.6, l);
+            float3 dir = mix(grainDirM, grainDirS, ws);
+            float tinted = noise01(p, float2(23.0, 37.0)) * 2.0 - 1.0;
+            float k = grainColor * (1.0 - 0.8 * smoothstep(0.55, 0.9, l));
+            g += ((cn - n) * (1.0 - grainColorBias) + tinted * dir * grainColorBias) * k;
         }
         rgb += g * amp;
     }
@@ -458,6 +470,11 @@ class FilmPreviewShader {
         shader.setFloatUniform("grainCellFraction", GRAIN_CELL * r.grainSize)
         shader.setFloatUniform("grainColor", r.grainColor)
         shader.setFloatUniform("grainRough", r.grainRoughness)
+        shader.setFloatUniform("grainColorBias", r.grainColorBias)
+        val ds = grainShadowDirection(r)
+        val dm = grainMidDirection(r)
+        shader.setFloatUniform("grainDirS", ds[0], ds[1], ds[2])
+        shader.setFloatUniform("grainDirM", dm[0], dm[1], dm[2])
         shader.setFloatUniform("grainTone", r.grainShadows, r.grainMids, r.grainHighlights)
     }
 

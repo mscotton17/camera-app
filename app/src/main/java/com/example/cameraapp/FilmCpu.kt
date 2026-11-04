@@ -163,9 +163,10 @@ private fun hsvToRgb(h: Float, s: Float, v: Float, out: FloatArray) {
 
 /**
  * Step 3: vibrance, highlight/shadow saturation, blue chrome, HSL bands and skin protection.
- * [rgb] (0..1) is modified in place; [orig] is the pixel before the recipe, for skin detection.
+ * [rgb] (0..1) is modified in place; [orig] is the pixel before the recipe, for skin detection;
+ * [chromeWeight] is how strongly colour chrome (step 2) already acted on this pixel.
  */
-private fun colorStage(rgb: FloatArray, orig: FloatArray, r: FilmRecipe, hsv: FloatArray) {
+private fun colorStage(rgb: FloatArray, orig: FloatArray, r: FilmRecipe, hsv: FloatArray, chromeWeight: Float) {
     rgbToHsv(rgb[0], rgb[1], rgb[2], hsv)
     var h = hsv[0]
     var s = hsv[1]
@@ -176,7 +177,9 @@ private fun colorStage(rgb: FloatArray, orig: FloatArray, r: FilmRecipe, hsv: Fl
         s = (s * k).coerceIn(0f, 1f)
     }
     if (r.colorChromeBlue > 0f) {
-        val w = bandWeight(h, BLUE_BAND) * smoothstep(0.35f, 0.8f, s) * r.colorChromeBlue
+        // Only does what colour chrome hasn't already done to this pixel, so the two never
+        // stack past blue chrome's own maximum, and eases off toward cyan.
+        val w = blueChromeHueWeight(h) * smoothstep(0.35f, 0.8f, s) * r.colorChromeBlue * (1f - chromeWeight)
         s *= 1f - 0.2f * w
         v *= 1f - 0.22f * w
     }
@@ -263,6 +266,8 @@ fun applyRecipe(bitmap: Bitmap, recipe: FilmRecipe, rect: Rect = Rect(0, 0, bitm
     val vignetteStart = 1f - recipe.vignetteFeather.coerceIn(0.05f, 1f)
     val grainLevels = recipe.grain * 255f
     val grainCell = max(1f, rw * GRAIN_CELL * recipe.grainSize)
+    val grainShadow = grainShadowDirection(recipe)
+    val grainMid = grainMidDirection(recipe)
     val leakAngle = Math.toRadians(recipe.lightLeakAngle.toDouble())
     // The leak's centre sits just beyond the frame edge in the chosen direction.
     val leakX = cos(leakAngle).toFloat() * (cx / halfDiagonal) * 1.15f
@@ -377,9 +382,11 @@ fun applyRecipe(bitmap: Bitmap, recipe: FilmRecipe, rect: Rect = Rect(0, 0, bitm
                     var fg = cm[5] * r + cm[6] * g + cm[7] * b + cm[9]
                     var fb = cm[10] * r + cm[11] * g + cm[12] * b + cm[14]
                     // 2. Colour chrome.
+                    var chromeW = 0f
                     if (chrome > 0f) {
                         val chroma = (max(fr, max(fg, fb)) - min(fr, min(fg, fb))) / 255f
                         val wgt = smoothstep(CHROME_LOW, CHROME_HIGH, chroma) * chrome
+                        chromeW = wgt
                         if (wgt > 0f) {
                             val l = LR * fr + LG * fg + LB * fb
                             val keep = 1f - CHROME_DESAT * wgt
@@ -393,7 +400,7 @@ fun applyRecipe(bitmap: Bitmap, recipe: FilmRecipe, rect: Rect = Rect(0, 0, bitm
                     if (hasColorStage) {
                         px[0] = (fr / 255f).coerceIn(0f, 1f); px[1] = (fg / 255f).coerceIn(0f, 1f); px[2] = (fb / 255f).coerceIn(0f, 1f)
                         orig[0] = (r / 255f).coerceIn(0f, 1f); orig[1] = (g / 255f).coerceIn(0f, 1f); orig[2] = (b / 255f).coerceIn(0f, 1f)
-                        colorStage(px, orig, recipe, hsv)
+                        colorStage(px, orig, recipe, hsv, chromeW)
                         fr = px[0] * 255f; fg = px[1] * 255f; fb = px[2] * 255f
                     }
                     // 4. Local tone: lift dark areas, hold back bright ones.
@@ -489,9 +496,18 @@ fun applyRecipe(bitmap: Bitmap, recipe: FilmRecipe, rect: Rect = Rect(0, 0, bitm
                         if (amp > 0f) {
                             val n = grainAt(x, y, seed)
                             if (recipe.grainColor > 0f) {
-                                outR += amp * (n + (grainAt(x, y, seed + 1) - n) * recipe.grainColor)
-                                outG += amp * (n + (grainAt(x, y, seed + 2) - n) * recipe.grainColor)
-                                outB += amp * (n + (grainAt(x, y, seed + 3) - n) * recipe.grainColor)
+                                // Colour part: random per-channel noise blended with noise along
+                                // the recipe's tint direction (dye clouds), fading in highlights.
+                                val ws = 1f - smoothstep(0.2f, 0.6f, l)
+                                val dr = grainShadow[0] * ws + grainMid[0] * (1f - ws)
+                                val dg = grainShadow[1] * ws + grainMid[1] * (1f - ws)
+                                val db = grainShadow[2] * ws + grainMid[2] * (1f - ws)
+                                val tinted = grainAt(x, y, seed + 4)
+                                val bias = recipe.grainColorBias
+                                val k = recipe.grainColor * colorGrainToneWeight(l)
+                                outR += amp * (n + ((grainAt(x, y, seed + 1) - n) * (1f - bias) + tinted * dr * bias) * k)
+                                outG += amp * (n + ((grainAt(x, y, seed + 2) - n) * (1f - bias) + tinted * dg * bias) * k)
+                                outB += amp * (n + ((grainAt(x, y, seed + 3) - n) * (1f - bias) + tinted * db * bias) * k)
                             } else {
                                 outR += amp * n; outG += amp * n; outB += amp * n
                             }

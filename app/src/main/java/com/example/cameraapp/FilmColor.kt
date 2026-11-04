@@ -1,6 +1,7 @@
 package com.example.cameraapp
 
 import android.graphics.ColorMatrix
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.ln
@@ -68,6 +69,32 @@ internal fun bandWeight(h: Float, i: Int): Float {
     val d = fract(h - BandCenters[i] + 0.5f) - 0.5f
     return max(0f, 1f - max(d / BandRight[i], -d / BandLeft[i]))
 }
+
+/**
+ * Blue chrome's hue weight: the blue band tent, eased so cyans part-way to aqua get much less
+ * (a cyan halfway to aqua gets ~0.26 instead of 0.5), which keeps sky gradients smooth.
+ */
+internal fun blueChromeHueWeight(h: Float): Float = smoothstep(0.25f, 1f, bandWeight(h, BLUE_BAND))
+
+/** Fallback colour-grain tint: dye clouds read cool magenta in the shadows. */
+private val DefaultGrainTint = Tint(0.2f, -0.45f, 0.25f)
+
+/** A zero-sum colour direction scaled so its largest component is 1. */
+private fun grainDirection(t: Tint, fallback: Tint): FloatArray {
+    val src = if (abs(t.r) + abs(t.g) + abs(t.b) < 1e-4f) fallback else t
+    val mean = (src.r + src.g + src.b) / 3f
+    val v = floatArrayOf(src.r - mean, src.g - mean, src.b - mean)
+    val m = max(abs(v[0]), max(abs(v[1]), abs(v[2]))).takeIf { it > 1e-6f } ?: return floatArrayOf(0f, 0f, 0f)
+    return floatArrayOf(v[0] / m, v[1] / m, v[2] / m)
+}
+
+/** Colour-grain direction for the shadows (from shadowTint) and the mids (from midTint). */
+internal fun grainShadowDirection(r: FilmRecipe): FloatArray = grainDirection(r.shadowTint, DefaultGrainTint)
+internal fun grainMidDirection(r: FilmRecipe): FloatArray =
+    grainDirection(r.midTint, Tint(grainShadowDirection(r)[0], grainShadowDirection(r)[1], grainShadowDirection(r)[2]))
+
+/** How much colour grain shows at luminance [l]: full in shadows/mids, mostly clean highlights. */
+internal fun colorGrainToneWeight(l: Float): Float = 1f - 0.8f * smoothstep(0.55f, 0.9f, l)
 
 /** Grain weight by tone: bumps centred on shadows, mids and highlights. */
 internal fun grainToneWeight(l: Float, r: FilmRecipe): Float {
@@ -156,7 +183,7 @@ internal fun buildLut(r: FilmRecipe): IntArray {
     val lut = IntArray(768)
     val xs5 = floatArrayOf(0f, 0.25f, 0.5f, 0.75f, 1f)
     val exposureGain = 2f.pow(r.exposure / 2.2f)
-    val drStops = r.dynamicRange.stops
+    val drStops = r.effectiveDrLift
     val masterCustom = customCurve(r.curve(CurveChannel.MASTER))
     for (ch in 0 until 3) {
         fun t(tint: Tint) = when (ch) { 0 -> tint.r; 1 -> tint.g; else -> tint.b }
@@ -173,7 +200,7 @@ internal fun buildLut(r: FilmRecipe): IntArray {
         val channelCustom = customCurve(r.curve(CurveChannel.entries[ch + 1]))
         for (i in 0 until 256) {
             var x = i / 255f
-            if (drStops > 0) x = dynamicRangeLift(x, drStops)
+            if (drStops > 0.01f) x = dynamicRangeLift(x, drStops)
             x = (x * exposureGain).coerceIn(0f, 1f)
             x = toeShoulder(x, r.toe, r.shoulder)
             var y = base(x)
@@ -189,7 +216,7 @@ internal fun buildLut(r: FilmRecipe): IntArray {
  * Undo a DR200/DR400 underexposure: brighten by 2^stops in linear light, then roll the
  * highlights off so the extra headroom isn't clipped (extended Reinhard, white = 2^stops).
  */
-private fun dynamicRangeLift(x: Float, stops: Int): Float {
+private fun dynamicRangeLift(x: Float, stops: Float): Float {
     val w = 2f.pow(stops)
     val l = x.pow(2.2f) * w
     val mapped = l * (1f + l / (w * w)) / (1f + l)

@@ -39,6 +39,15 @@ fun applyAeCompensation(camera: Camera, ev: Float) {
     camera.cameraControl.setExposureCompensationIndex(index)
 }
 
+/** The exposure compensation range in EV the camera supports, or null if it has none. */
+fun aeCompensationRangeEv(camera: Camera): ClosedFloatingPointRange<Float>? {
+    val state = camera.cameraInfo.exposureState
+    if (!state.isExposureCompensationSupported) return null
+    val step = state.exposureCompensationStep.toFloat()
+    if (step <= 0f) return null
+    return state.exposureCompensationRange.lower * step..state.exposureCompensationRange.upper * step
+}
+
 /** Longest shutter the app picks by itself in ISO priority, to keep the viewfinder usable. */
 private const val AUTO_SHUTTER_MAX_NS = 1_000_000_000L / 8
 
@@ -185,8 +194,11 @@ fun applyExposure(camera: Camera, settings: ExposureSettings, awbMode: Int? = nu
     if (any) control.setCaptureRequestOptions(builder.build()) else control.clearCaptureRequestOptions()
 }
 
-/** Mean brightness (0..1) of the camera image within a FIT_CENTER [preview] bitmap. */
-fun meanLuma(preview: Bitmap): Float? {
+/**
+ * Mean brightness (0..1) of the camera image within a FIT_CENTER [preview] bitmap, measured
+ * only inside the recipe's [aspect] crop so priority metering ignores what won't be saved.
+ */
+fun meanLuma(preview: Bitmap, aspect: AspectRatio = AspectRatio.NATIVE): Float? {
     val w = preview.width
     val h = preview.height
     if (w == 0 || h == 0) return null
@@ -194,12 +206,12 @@ fun meanLuma(preview: Bitmap): Float? {
     val ratio = if (h > w) 3f / 4f else 4f / 3f
     val frameW = min(w.toFloat(), h * ratio)
     val frameH = frameW / ratio
-    val left = ((w - frameW) / 2f).roundToInt()
-    val top = ((h - frameH) / 2f).roundToInt()
-    val small = Bitmap.createScaledBitmap(
-        Bitmap.createBitmap(preview, left, top, frameW.roundToInt().coerceAtMost(w - left), frameH.roundToInt().coerceAtMost(h - top)),
-        48, 36, true
-    )
+    val crop = cropRect(frameW.roundToInt().coerceAtLeast(1), frameH.roundToInt().coerceAtLeast(1), aspect)
+    val left = ((w - frameW) / 2f).roundToInt() + crop.left
+    val top = ((h - frameH) / 2f).roundToInt() + crop.top
+    val cw = crop.width().coerceAtMost(w - left).coerceAtLeast(1)
+    val ch = crop.height().coerceAtMost(h - top).coerceAtLeast(1)
+    val small = Bitmap.createScaledBitmap(Bitmap.createBitmap(preview, left, top, cw, ch), 48, 36, true)
     val pixels = IntArray(small.width * small.height)
     small.getPixels(pixels, 0, small.width, 0, 0, small.width, small.height)
     var sum = 0.0

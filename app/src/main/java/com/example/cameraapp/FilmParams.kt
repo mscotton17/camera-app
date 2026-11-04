@@ -182,10 +182,11 @@ val RecipeSections: List<ParamSection> = listOf(
         note = "Each photo gets its own random pattern."
     ),
     ParamSection(
-        "GRAIN", listOf(
+        "GRAIN", note = "Colour grain is tinted like dye clouds (shadow / mid tints, or cool magenta) and fades out of the highlights.", params = listOf(
             f("grain", "Amount", 0f, 0f, 0.1f, 3, { it.grain }) { r, v -> r.copy(grain = v) },
             f("grainSize", "Size", 1f, 1f, 3f, 2, { it.grainSize }) { r, v -> r.copy(grainSize = v) },
             f("grainColor", "Color", 0f, 0f, 1f, 2, { it.grainColor }) { r, v -> r.copy(grainColor = v) },
+            f("grainColorBias", "Color grain follows tints", 0.6f, 0f, 1f, 2, { it.grainColorBias }) { r, v -> r.copy(grainColorBias = v) },
             f("grainRoughness", "Roughness", 0f, 0f, 1f, 2, { it.grainRoughness }) { r, v -> r.copy(grainRoughness = v) },
             f("grainShadows", "In shadows", 0f, 0f, 2f, 2, { it.grainShadows }) { r, v -> r.copy(grainShadows = v) },
             f("grainMids", "In midtones", 1f, 0f, 2f, 2, { it.grainMids }) { r, v -> r.copy(grainMids = v) },

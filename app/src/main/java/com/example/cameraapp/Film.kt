@@ -217,6 +217,11 @@ data class FilmRecipe(
     val grain: Float = 0f,
     val grainSize: Float = 1f,
     val grainColor: Float = 0f,
+    /**
+     * How much colour grain follows the recipe's shadow / mid tints (default: cool magenta)
+     * instead of random RGB, like dye clouds in colour negative film. 0 = fully random.
+     */
+    val grainColorBias: Float = 0.6f,
     val grainRoughness: Float = 0f,
     val grainShadows: Float = 0f,
     val grainMids: Float = 1f,
@@ -243,7 +248,16 @@ data class FilmRecipe(
     /** 35mm-equivalent focal length to switch to when the recipe is picked; 0 = keep. */
     val defaultLensMm: Int = 0,
     val defaultFormat: DefaultFormat = DefaultFormat.KEEP,
+    /**
+     * Not saved: the lift actually applied for [dynamicRange], set by the camera screen to
+     * match the underexposure the camera really achieved (0 in full manual). -1 = use the mode.
+     */
+    val drLiftStops: Float = -1f,
 ) {
+    /** Stops the tone curve lifts to undo the DR underexposure. */
+    internal val effectiveDrLift: Float
+        get() = if (drLiftStops >= 0f) drLiftStops else dynamicRange.stops.toFloat()
+
     /** Linear part as an Android ColorMatrix. */
     val colorMatrix: android.graphics.ColorMatrix by lazy { buildColorMatrix(this) }
 

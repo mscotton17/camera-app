@@ -9,6 +9,8 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import kotlin.math.min
@@ -46,6 +48,11 @@ fun FilmFrameOverlay(recipe: FilmRecipe, modifier: Modifier = Modifier) {
             drawRect(mask, Offset(image.left, crop.bottom), Size(image.width, image.bottom - crop.bottom))
             drawRect(mask, Offset(image.left, crop.top), Size(crop.left - image.left, crop.height))
             drawRect(mask, Offset(crop.right, crop.top), Size(image.right - crop.right, crop.height))
+            // Hairline at the crop edge, for precise framing.
+            drawRect(
+                Color.White.copy(alpha = 0.55f), Offset(crop.left, crop.top), Size(crop.width, crop.height),
+                style = Stroke(width = 1.dp.toPx())
+            )
         }
         if (recipe.border == BorderStyle.NONE) {
             if (recipe.dateStamp) drawStamp(recipe, crop.left, crop.top, crop.width, crop.height)

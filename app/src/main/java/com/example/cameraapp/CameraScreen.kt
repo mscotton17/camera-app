@@ -258,29 +258,6 @@ fun CameraScreen() {
         }
     }
     // The recipe the shader currently holds (null when none is applied).
-    val recipeCube = remember(recipe?.lutName, luts) { CubeLuts.load(context, recipe?.lutName) }
-    val shaderRecipe = remember(filmShader, recipe, recipeCube) {
-        if (filmShader != null && recipe != null && Build.VERSION.SDK_INT >= 33) {
-            try {
-                filmShader.update(recipe, recipeCube)
-                recipe
-            } catch (e: Exception) {
-                Log.e(TAG, "Film preview update failed", e)
-                null
-            }
-        } else {
-            null
-        }
-    }
-    var grainSeed by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(shaderRecipe?.grain) {
-        // Re-seed the grain ~12 times a second so it moves like film rather than sitting on the glass.
-        if (shaderRecipe == null || shaderRecipe.grain <= 0f) return@LaunchedEffect
-        while (isActive) {
-            delay(83)
-            grainSeed = (grainSeed + 1.618f) % 1000f
-        }
-    }
 
     // Re-develop an existing DNG or JPEG with the selected recipe into a new JPEG.
     val developLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -353,9 +330,48 @@ fun CameraScreen() {
     LaunchedEffect(bound, resolvedExposure, awbMode) {
         bound?.camera?.let { applyExposure(it, resolvedExposure, awbMode) }
     }
-    // DR200 / DR400 underexpose by 1 / 2 stops; the recipe's tone curve lifts it back.
+    // DR200 / DR400 underexpose the sensor by 1 / 2 stops (camera exposure compensation in
+    // auto, the metering target in shutter/ISO priority); the tone curve lifts it back by
+    // exactly what was achieved. Full manual can't be underexposed for you, so no lift there.
     val drStops = recipe?.dynamicRange?.stops ?: 0
     val meteringEv = evComp - drStops
+    val fullManual = resolvedExposure.shutterLocked && resolvedExposure.isoLocked
+    val aeRange = bound?.camera?.let { aeCompensationRangeEv(it) }
+    val drLift: Float = when {
+        drStops == 0 -> 0f
+        fullManual -> 0f
+        resolvedExposure.priorityMode -> drStops.toFloat()
+        aeRange == null -> 0f
+        // The camera clamps compensation to its range (often ±2 EV), so DR400 with negative
+        // EV of your own may only get part of the way.
+        else -> (evComp.coerceIn(aeRange) - meteringEv.coerceIn(aeRange)).coerceIn(0f, drStops.toFloat())
+    }
+    // The recipe as actually rendered (preview and photo), with the achievable DR lift.
+    val renderRecipe = recipe?.let { if (drStops > 0) it.copy(drLiftStops = drLift) else it }
+
+    val recipeCube = remember(recipe?.lutName, luts) { CubeLuts.load(context, recipe?.lutName) }
+    val shaderRecipe = remember(filmShader, renderRecipe, recipeCube) {
+        if (filmShader != null && renderRecipe != null && Build.VERSION.SDK_INT >= 33) {
+            try {
+                filmShader.update(renderRecipe, recipeCube)
+                renderRecipe
+            } catch (e: Exception) {
+                Log.e(TAG, "Film preview update failed", e)
+                null
+            }
+        } else {
+            null
+        }
+    }
+    var grainSeed by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(shaderRecipe?.grain) {
+        // Re-seed the grain ~12 times a second so it moves like film rather than sitting on the glass.
+        if (shaderRecipe == null || shaderRecipe.grain <= 0f) return@LaunchedEffect
+        while (isActive) {
+            delay(83)
+            grainSeed = (grainSeed + 1.618f) % 1000f
+        }
+    }
 
     // In full auto, EV compensation goes through the camera's own auto-exposure.
     LaunchedEffect(bound, meteringEv, resolvedExposure.manualSensor) {
@@ -373,7 +389,7 @@ fun CameraScreen() {
             val frameMs = (exposure.shutterNs ?: 0L) / 1_000_000L
             delay(max(250L, frameMs * 3))
             if (capturing) continue
-            val luma = previewView.bitmap?.let { meanLuma(it) } ?: continue
+            val luma = previewView.bitmap?.let { meanLuma(it, recipe?.aspect ?: AspectRatio.NATIVE) } ?: continue
             val next = exposure.resolvedFor(caps).meteredStep(luma, caps, meteringEv)
             if (next != exposure) exposure = next
         }
@@ -473,11 +489,13 @@ fun CameraScreen() {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(bound) {
+                .pointerInput(bound, recipe?.aspect) {
                     detectTapGestures { offset ->
                         val cam = bound?.camera ?: return@detectTapGestures
-                        // Ignore taps on the black bars around the image.
-                        if (!insidePreviewFrame(size.width.toFloat(), size.height.toFloat(), offset)) {
+                        // Ignore taps on the black bars and on the recipe's crop matte.
+                        val viewSize = androidx.compose.ui.geometry.Size(size.width.toFloat(), size.height.toFloat())
+                        val crop = previewCropRect(previewImageRect(viewSize), recipe?.aspect ?: AspectRatio.NATIVE)
+                        if (!insidePreviewFrame(size.width.toFloat(), size.height.toFloat(), offset) || !crop.contains(offset)) {
                             return@detectTapGestures
                         }
                         val point = previewView.meteringPointFactory.createPoint(offset.x, offset.y)
@@ -670,7 +688,7 @@ fun CameraScreen() {
                         format = b.format,
                         mirror = lens?.facing == CameraSelector.LENS_FACING_FRONT,
                         telemetry = telemetry.latest,
-                        recipe = recipe,
+                        recipe = renderRecipe,
                         ioExecutor = ioExecutor
                     ) { capturing = false }
                 },
