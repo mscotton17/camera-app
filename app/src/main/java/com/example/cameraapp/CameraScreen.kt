@@ -137,8 +137,8 @@ fun CameraScreen() {
     var provider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
     var lensSet by remember { mutableStateOf<LensSet?>(null) }
     var selectedLensKey by rememberSaveable { mutableStateOf<String?>(null) }
-    // Default to RAW (DNG); lenses without RAW support fall back to JPEG automatically.
-    var format by rememberSaveable { mutableStateOf(CaptureFormat.RAW) }
+    // JPEG by default; RAW / RAW+JPG can be picked from the RAW badge or the menu.
+    var format by rememberSaveable { mutableStateOf(CaptureFormat.JPEG) }
     var flash by rememberSaveable { mutableStateOf(FlashSetting.AUTO) }
     var bound by remember { mutableStateOf<BoundCamera?>(null) }
     var capturing by remember { mutableStateOf(false) }
