@@ -569,7 +569,6 @@ fun CameraScreen() {
             add(HudItem.RECIPE)
         }
         val shownPicker = openPicker?.takeIf { it in pickable }
-        // PRO-mode picker for the tapped exposure value.
 
         // Film recipe button: beside the shutter (left of it in portrait, under it in
         // landscape), with its picker opening next to it.
