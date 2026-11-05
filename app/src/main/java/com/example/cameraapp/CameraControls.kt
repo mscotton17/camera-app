@@ -85,6 +85,8 @@ enum class FlashSetting(val mode: Int, val label: String) {
 }
 
 enum class CaptureFormat(val outputFormat: Int, val label: String) {
+    /** Shoots a DNG and develops the JPEG from it with the film engine (no phone processing). */
+    DNG_FILM(ImageCapture.OUTPUT_FORMAT_RAW, "DNG+FILM"),
     JPEG(ImageCapture.OUTPUT_FORMAT_JPEG, "JPG"),
     RAW(ImageCapture.OUTPUT_FORMAT_RAW, "RAW"),
     RAW_JPEG(ImageCapture.OUTPUT_FORMAT_RAW_JPEG, "RAW+JPG");

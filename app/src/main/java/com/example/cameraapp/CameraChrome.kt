@@ -152,7 +152,11 @@ fun TopIconBar(
                     .padding(horizontal = 5.dp, vertical = 2.dp)
             ) {
                 Text(
-                    if (raw) "RAW" else "JPG",
+                    when (format) {
+                        CaptureFormat.DNG_FILM -> "FILM"
+                        CaptureFormat.JPEG -> "JPG"
+                        else -> "RAW"
+                    },
                     color = if (raw) HudAmber else Dim,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,

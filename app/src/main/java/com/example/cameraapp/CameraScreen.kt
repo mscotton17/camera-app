@@ -144,7 +144,8 @@ fun CameraScreen() {
     var lensSet by remember { mutableStateOf<LensSet?>(null) }
     var selectedLensKey by rememberSaveable { mutableStateOf<String?>(null) }
     // JPEG by default; RAW / RAW+JPG can be picked from the RAW badge or the menu.
-    var format by rememberSaveable { mutableStateOf(CaptureFormat.JPEG) }
+    // Default: shoot DNG and develop it with the film engine (JPG where the lens has no RAW).
+    var format by rememberSaveable { mutableStateOf(CaptureFormat.DNG_FILM) }
     var flash by rememberSaveable { mutableStateOf(FlashSetting.OFF) }
     var bound by remember { mutableStateOf<BoundCamera?>(null) }
     var capturing by remember { mutableStateOf(false) }
@@ -1151,7 +1152,7 @@ fun CameraScreen() {
             Scrim { menuOpen = false }
             SidewaysHost(deviceOrientation) { sideways ->
             MenuSheet(
-                formats = listOf(CaptureFormat.JPEG, CaptureFormat.RAW, CaptureFormat.RAW_JPEG)
+                formats = listOf(CaptureFormat.DNG_FILM, CaptureFormat.JPEG, CaptureFormat.RAW, CaptureFormat.RAW_JPEG)
                     .filter { it.outputFormat in lens?.supportedFormats.orEmpty() },
                 format = activeFormat,
                 // A recipe needs a JPEG to bake into, so RAW alone is off while one is on.

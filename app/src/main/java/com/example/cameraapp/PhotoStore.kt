@@ -115,7 +115,23 @@ fun takePhoto(
         override fun onImageSaved(output: ImageCapture.OutputFileResults) {
             release()
             val uri = output.savedUri
-            if (uri != null && output.imageFormat != ImageFormat.RAW_SENSOR) {
+            if (uri == null) return
+            if (format == CaptureFormat.DNG_FILM) {
+                // Develop the JPEG from the DNG itself, with the recipe (or neutral).
+                DevelopQueue.submit {
+                    val look = recipe ?: FilmRecipe(id = "", label = "")
+                    val jpeg = developImage(context, uri, look, displayName = name, time = time)
+                    if (jpeg == null) mainExecutor.execute {
+                        Toast.makeText(context, "Couldn't develop the DNG; it's saved in your photos", Toast.LENGTH_SHORT).show()
+                    } else {
+                        try {
+                            writeExifIfMissing(context, jpeg, telemetry)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Could not write EXIF exposure data", e)
+                        }
+                    }
+                }
+            } else if (output.imageFormat != ImageFormat.RAW_SENSOR) {
                 DevelopQueue.submit { finishJpeg(context, uri, name, time, telemetry, recipe) }
             }
         }
@@ -134,7 +150,7 @@ fun takePhoto(
         when (format) {
             CaptureFormat.JPEG ->
                 imageCapture.takePicture(outputOptions(MIME_JPEG, true), ioExecutor, callback)
-            CaptureFormat.RAW ->
+            CaptureFormat.RAW, CaptureFormat.DNG_FILM ->
                 imageCapture.takePicture(outputOptions(MIME_DNG, false), ioExecutor, callback)
             CaptureFormat.RAW_JPEG -> imageCapture.takePicture(
                 outputOptions(MIME_DNG, false),
@@ -308,14 +324,22 @@ fun applyRecipeToJpeg(context: Context, uri: Uri, recipe: FilmRecipe, timeMillis
  * Develops an existing photo (DNG or JPEG) with [recipe] into a new JPEG in the album.
  * Returns the new photo, or null if the file couldn't be read.
  */
-fun developImage(context: Context, source: Uri, recipe: FilmRecipe): Uri? {
+fun developImage(
+    context: Context,
+    source: Uri,
+    recipe: FilmRecipe,
+    /** Name for the new JPEG; defaults to the source's name plus the recipe's. */
+    displayName: String? = null,
+    /** Capture time, when known; otherwise read from the file. */
+    time: Long? = null,
+): Uri? {
     val resolver = context.contentResolver
     val savedExif = try {
         resolver.openInputStream(source)?.use { readExif(ExifInterface(it)) }.orEmpty()
     } catch (e: Exception) {
         emptyMap()
     }
-    val time = savedExif[ExifInterface.TAG_DATETIME_ORIGINAL]?.let {
+    val time = time ?: savedExif[ExifInterface.TAG_DATETIME_ORIGINAL]?.let {
         try {
             SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).parse(it)?.time
         } catch (e: Exception) {
@@ -347,7 +371,7 @@ fun developImage(context: Context, source: Uri, recipe: FilmRecipe): Uri? {
     }?.substringBeforeLast('.') ?: SimpleDateFormat("yyyy-MM-dd-HH-mm-ss", Locale.US).format(time)
     val target = resolver.insert(
         MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-        albumValues("${sourceName}_${fileSafe(recipe.label)}", MIME_JPEG)
+        albumValues(displayName ?: "${sourceName}_${fileSafe(recipe.label)}", MIME_JPEG)
     ) ?: return null
 
     val out = renderRecipe(context, bitmap, recipe, time)

@@ -109,6 +109,7 @@ enum class DynamicRange(override val key: String, override val label: String, va
 
 enum class DefaultFormat(override val key: String, override val label: String, val format: CaptureFormat?) : Keyed {
     KEEP("keep", "KEEP", null),
+    DNG_FILM("dng_film", "DNG+FILM", CaptureFormat.DNG_FILM),
     JPG("jpg", "JPG", CaptureFormat.JPEG),
     RAW("raw", "RAW", CaptureFormat.RAW),
     RAW_JPG("raw_jpg", "RAW+JPG", CaptureFormat.RAW_JPEG),
