@@ -28,6 +28,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.layout.wrapContentWidth
 import kotlinx.coroutines.launch
@@ -730,5 +733,34 @@ private fun Arrow(symbol: String, target: FilmRecipe?, onSelect: (String) -> Uni
         contentAlignment = Alignment.Center
     ) {
         if (target != null) Text(symbol, color = Color.White.copy(alpha = 0.7f), fontSize = 22.sp)
+    }
+}
+
+/**
+ * Hosts a panel the way the phone is held. Upright (or upside down) it fills the screen as usual.
+ * Held sideways, the screen stays portrait, so [content] gets a landscape-shaped box turned to
+ * read upright, padded clear of the status and navigation bars (which are now at its sides).
+ */
+@Composable
+fun SidewaysHost(deviceOrientation: Int, content: @Composable androidx.compose.foundation.layout.BoxScope.(sideways: Boolean) -> Unit) {
+    val sideways = deviceOrientation == 90 || deviceOrientation == 270
+    if (!sideways) {
+        Box(Modifier.fillMaxSize()) { content(false) }
+        return
+    }
+    val d = androidx.compose.ui.platform.LocalDensity.current
+    val top = with(d) { androidx.compose.foundation.layout.WindowInsets.statusBars.getTop(d).toDp() }
+    val bottom = with(d) { androidx.compose.foundation.layout.WindowInsets.navigationBars.getBottom(d).toDp() }
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+        // Turned a quarter anticlockwise (phone turned clockwise), the box's right edge is the
+        // phone's top; turned clockwise, its right edge is the phone's bottom.
+        val (startPad, endPad) = if (deviceOrientation == 90) bottom to top else top to bottom
+        Box(
+            Modifier
+                .align(Alignment.Center)
+                .requiredSize(maxHeight, maxWidth)
+                .graphicsLayer { rotationZ = -deviceOrientation.toFloat() }
+                .padding(start = startPad, end = endPad)
+        ) { content(true) }
     }
 }

@@ -956,14 +956,21 @@ fun CameraScreen() {
         }
 
         val editing = draft
-        val panelModifier = if (isLandscape) {
-            Modifier
+        val panelOpen = recipePickerOpen || proPanelOpen || editing != null
+        // Panels open the way the phone is held: held sideways, they're laid out for a landscape
+        // screen (right half) and turned to read upright, though the screen stays portrait.
+        if (panelOpen) SidewaysHost(deviceOrientation) { sideways ->
+        val panelModifier = when {
+            sideways -> Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .fillMaxWidth(0.5f)
+            isLandscape -> Modifier
                 .align(Alignment.CenterEnd)
                 .fillMaxHeight()
                 .fillMaxWidth(0.5f)
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.End + WindowInsetsSides.Vertical))
-        } else {
-            Modifier
+            else -> Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .fillMaxHeight(0.55f)
@@ -1036,20 +1043,9 @@ fun CameraScreen() {
                     luts = CubeLuts.list(context)
                     draft = draft?.copy(lutName = null)
                 },
-                modifier = if (isLandscape) {
-                    Modifier
-                        .align(Alignment.CenterEnd)
-                        .fillMaxHeight()
-                        .fillMaxWidth(0.5f)
-                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.End + WindowInsetsSides.Vertical))
-                } else {
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .fillMaxHeight(0.55f)
-                        .navigationBarsPadding()
-                }
+                modifier = panelModifier
             )
+        }
         } else if (isLandscape) {
             // Recipes keep their portrait position and orientation relative to the phone: the
             // same strip, turned 90 degrees, in the band between the image and the shutter.
@@ -1117,6 +1113,7 @@ fun CameraScreen() {
         // ☰ menu: drops from the top over everything else.
         if (menuOpen) {
             Scrim { menuOpen = false }
+            SidewaysHost(deviceOrientation) { sideways ->
             MenuSheet(
                 formats = listOf(CaptureFormat.JPEG, CaptureFormat.RAW, CaptureFormat.RAW_JPEG)
                     .filter { it.outputFormat in lens?.supportedFormats.orEmpty() },
@@ -1162,9 +1159,12 @@ fun CameraScreen() {
                 onClose = { menuOpen = false },
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .then(if (isLandscape) Modifier.fillMaxWidth(0.6f) else Modifier.fillMaxWidth())
-                    .statusBarsPadding()
+                    .then(if (isLandscape || sideways) Modifier.fillMaxWidth(0.6f) else Modifier.fillMaxWidth())
+                    .then(if (sideways) Modifier else Modifier.statusBarsPadding())
+                    // Sideways the screen is short: let the menu scroll.
+                    .then(if (sideways) Modifier.verticalScroll(rememberScrollState()) else Modifier)
             )
+            }
         }
     }
     }
