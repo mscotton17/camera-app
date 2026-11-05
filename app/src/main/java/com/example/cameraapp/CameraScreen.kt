@@ -140,7 +140,7 @@ fun CameraScreen() {
     var selectedLensKey by rememberSaveable { mutableStateOf<String?>(null) }
     // JPEG by default; RAW / RAW+JPG can be picked from the RAW badge or the menu.
     var format by rememberSaveable { mutableStateOf(CaptureFormat.JPEG) }
-    var flash by rememberSaveable { mutableStateOf(FlashSetting.AUTO) }
+    var flash by rememberSaveable { mutableStateOf(FlashSetting.OFF) }
     var bound by remember { mutableStateOf<BoundCamera?>(null) }
     var capturing by remember { mutableStateOf(false) }
     // Which HUD item's picker is open (lens, shutter, ISO, f-stop), if any.
