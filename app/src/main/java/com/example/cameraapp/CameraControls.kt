@@ -347,25 +347,22 @@ fun RecipeButton(recipe: FilmRecipe?, open: Boolean, onClick: () -> Unit, modifi
     }
 }
 
-/**
- * PRO button: a light-blue disc matching the shutter. An amber ring shows while any exposure
- * setting is manual; it dims slightly while its panel is open.
- */
+/** PRO button: amber while any exposure setting is manual, highlighted while its panel is open. */
 @Composable
 fun ProButton(active: Boolean, open: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .size(52.dp)
             .clip(CircleShape)
-            .background(if (open) ShutterBlue.copy(alpha = 0.75f) else ShutterBlue)
-            .then(if (active) Modifier.border(2.5.dp, HudAmber, CircleShape) else Modifier)
+            .background(if (open) HudAmber.copy(alpha = 0.25f) else ControlBackground)
+            .border(1.5.dp, if (active || open) HudAmber else ControlBorder, CircleShape)
             .clickable(onClick = onClick)
             .semantics { contentDescription = if (active) "Pro controls, manual settings on" else "Pro controls" },
         contentAlignment = Alignment.Center
     ) {
         Text(
             "PRO",
-            color = Color(0xFF0B2236),
+            color = if (active || open) HudAmber else Color.White,
             fontFamily = FontFamily.Monospace,
             fontSize = 13.sp,
             fontWeight = FontWeight.Bold
