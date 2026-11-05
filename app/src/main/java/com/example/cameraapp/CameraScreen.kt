@@ -572,15 +572,17 @@ fun CameraScreen() {
         }
         val shownPicker = openPicker?.takeIf { it in pickable }
 
-        // Film recipe button: beside the shutter (left of it in portrait, under it in
-        // landscape), with its picker opening next to it.
-        val recipeButton: @Composable (Modifier) -> Unit = { m ->
-            RecipeButton(
-                recipe = recipe,
-                open = shownPicker == HudItem.RECIPE,
+        // PRO button beside the shutter (left of it in portrait, under it in landscape): opens
+        // the PRO panel; lit while any exposure setting is manual.
+        val proActive = resolvedExposure.shutterLocked || resolvedExposure.isoLocked ||
+            resolvedExposure.aperture != null || evComp != 0f
+        val proButton: @Composable (Modifier) -> Unit = { m ->
+            ProButton(
+                active = proActive,
+                open = proPanelOpen,
                 onClick = {
-                    proPanelOpen = false
-                    openPicker = if (shownPicker == HudItem.RECIPE) null else HudItem.RECIPE
+                    openPicker = null
+                    proPanelOpen = !proPanelOpen
                 },
                 modifier = m
             )
@@ -972,7 +974,7 @@ fun CameraScreen() {
                     switchButton(Modifier)
                     shutterButton(Modifier)
                     // Same height as the switch button so the shutter stays centred.
-                    Box(Modifier.height(52.dp), contentAlignment = Alignment.Center) { recipeButton(Modifier) }
+                    Box(Modifier.height(52.dp), contentAlignment = Alignment.Center) { proButton(Modifier) }
                 }
             }
         } else {
@@ -986,7 +988,7 @@ fun CameraScreen() {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Box(modifier = Modifier.fillMaxWidth()) {
-                    recipeButton(Modifier.align(Alignment.CenterStart).padding(start = 20.dp))
+                    proButton(Modifier.align(Alignment.CenterStart).padding(start = 40.dp))
                     shutterButton(Modifier.align(Alignment.Center))
                     switchButton(Modifier.align(Alignment.CenterEnd).padding(end = 40.dp))
                 }
@@ -1016,6 +1018,11 @@ fun CameraScreen() {
                 evAvailable = !fullManual,
                 onEv = { evComp = it },
                 tiles = listOf(
+                    MenuTile("\u25A4", "Recipes") {
+                        menuOpen = false
+                        proPanelOpen = false
+                        openPicker = HudItem.RECIPE
+                    },
                     MenuTile("\u270E", "Recipe editor") {
                         menuOpen = false
                         openPicker = null

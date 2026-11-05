@@ -50,6 +50,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -342,6 +343,29 @@ fun RecipeButton(recipe: FilmRecipe?, open: Boolean, onClick: () -> Unit, modifi
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center
+        )
+    }
+}
+
+/** PRO button: amber while any exposure setting is manual, highlighted while its panel is open. */
+@Composable
+fun ProButton(active: Boolean, open: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(52.dp)
+            .clip(CircleShape)
+            .background(if (open) HudAmber.copy(alpha = 0.25f) else ControlBackground)
+            .border(1.5.dp, if (active || open) HudAmber else ControlBorder, CircleShape)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = if (active) "Pro controls, manual settings on" else "Pro controls" },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            "PRO",
+            color = if (active || open) HudAmber else Color.White,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold
         )
     }
 }
