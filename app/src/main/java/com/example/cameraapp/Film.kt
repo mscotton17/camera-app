@@ -342,4 +342,19 @@ val FilmRecipes: List<FilmRecipe> = listOf(
         aspect = AspectRatio.THREE_TWO,
         whiteBalance = WhiteBalance.AUTO, defaultEvOn = true, defaultEv = 1f / 3f,
     ),
+    // Tri-X Noir: classic pushed Kodak Tri-X 400 street look — true inky blacks, bright punchy
+    // whites, gritty midtone micro-contrast and no lifted matte wash.
+    FilmRecipe(
+        id = "tri_x_noir", label = "TRI-X NOIR",
+        mono = Triple(0.55f, 0.40f, 0.05f),
+        contrast = 0.28f, blackPoint = 0f, shadows = -0.075f, mids = 0.015f, highlights = 0.050f, whitePoint = 1f,
+        toe = 0.05f, shoulder = 0.35f, highlightRecovery = 0f, shadowRecovery = 0f, dynamicRange = DynamicRange.DR100,
+        sharpen = 0.20f, cornerSoftness = 0f, chromaticAberration = 0f,
+        clarity = 0.35f, clarityRadius = 0.8f,
+        vignette = 0.30f, vignetteFeather = 0.70f, vignetteRoundness = 1.0f,
+        grain = 0.040f, grainSize = 1.3f, grainColor = 0f, grainRoughness = 0.50f,
+        grainShadows = 0.8f, grainMids = 1.2f, grainHighlights = 0.1f,
+        aspect = AspectRatio.THREE_TWO,
+        whiteBalance = WhiteBalance.AUTO, defaultEvOn = true, defaultEv = -1f / 3f,
+    ),
 )
