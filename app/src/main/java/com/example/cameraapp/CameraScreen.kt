@@ -805,9 +805,6 @@ fun CameraScreen() {
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         topBar(Modifier.fillMaxWidth(), true)
-                        if (draft == null) {
-                            RecipeCarousel(allRecipes, selectedRecipe?.id, selectRecipe, Modifier.fillMaxWidth(), vertical = true)
-                        }
                     }
                 }
             }
@@ -1101,10 +1098,16 @@ fun CameraScreen() {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(
-                    verticalArrangement = Arrangement.spacedBy(40.dp, Alignment.CenterVertically),
+                    verticalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterVertically),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     switchButton(Modifier)
+                    // Recipes stay just above the shutter, swiping left / right as in portrait.
+                    RecipeCarousel(
+                        allRecipes, selectedRecipe?.id, selectRecipe,
+                        Modifier.width(120.dp),
+                        compact = true
+                    )
                     shutterButton(Modifier)
                     // Same height as the switch button so the shutter stays centred.
                     Box(Modifier.height(52.dp), contentAlignment = Alignment.Center) { proButton(Modifier) }

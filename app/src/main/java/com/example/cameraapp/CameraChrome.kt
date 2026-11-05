@@ -497,6 +497,8 @@ fun RecipeCarousel(
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
     vertical: Boolean = false,
+    /** Narrow version (landscape, beside the shutter): current name with ‹ › arrows. */
+    compact: Boolean = false,
 ) {
     if (recipes.isEmpty()) return
     val index = recipes.indexOfFirst { it.id == selectedId }.coerceAtLeast(0)
@@ -542,6 +544,27 @@ fun RecipeCarousel(
         )
     }
 
+    if (compact) {
+        Row(modifier.then(swipe), verticalAlignment = Alignment.CenterVertically) {
+            Arrow("\u2039", prev, onSelect)
+            Text(
+                text = current.label,
+                color = HudAmber,
+                fontSize = 13.sp,
+                lineHeight = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.5.sp,
+                maxLines = 2,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .weight(1f)
+                    .semantics { contentDescription = "Recipe ${current.label}, selected. Swipe to change." }
+            )
+            Arrow("\u203A", next, onSelect)
+        }
+        return
+    }
     if (vertical) {
         Column(modifier.then(swipe), horizontalAlignment = Alignment.CenterHorizontally) {
             Name(prev, false, Modifier.fillMaxWidth())
@@ -554,5 +577,20 @@ fun RecipeCarousel(
             Name(current, true, Modifier.weight(1.5f))
             Name(next, false, Modifier.weight(1f))
         }
+    }
+}
+
+/** Tappable ‹ / › arrow for the compact recipe carousel; blank (but space-holding) at the ends. */
+@Composable
+private fun Arrow(symbol: String, target: FilmRecipe?, onSelect: (String) -> Unit) {
+    Box(
+        Modifier
+            .size(width = 22.dp, height = 40.dp)
+            .clip(RoundedCornerShape(50))
+            .then(if (target != null) Modifier.clickable { onSelect(target.id) } else Modifier)
+            .semantics { if (target != null) contentDescription = "Switch to ${target.label}" },
+        contentAlignment = Alignment.Center
+    ) {
+        if (target != null) Text(symbol, color = Color.White.copy(alpha = 0.7f), fontSize = 22.sp)
     }
 }
