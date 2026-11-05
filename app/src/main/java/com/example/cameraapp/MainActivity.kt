@@ -45,7 +45,10 @@ class MainActivity : ComponentActivity() {
         )
         setContent {
             MaterialTheme {
-                PermissionGate { CameraScreen() }
+                PermissionGate {
+                    CameraScreen()
+                    LeaveWhileDevelopingGuard(onLeave = { finish() })
+                }
             }
         }
     }
@@ -99,4 +102,47 @@ fun PermissionGate(content: @Composable () -> Unit) {
             }
         }
     }
+}
+
+/**
+ * Back while photos are still developing: explains that leaving now may stop them before their
+ * recipe is applied, and offers to wait, close once they're done, or close anyway.
+ */
+@Composable
+private fun LeaveWhileDevelopingGuard(onLeave: () -> Unit) {
+    val pending = DevelopQueue.pending.intValue
+    var asking by remember { mutableStateOf(false) }
+    var leaveWhenDone by remember { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler(enabled = pending > 0) { asking = true }
+    LaunchedEffect(pending, leaveWhenDone) {
+        if (pending == 0) {
+            asking = false
+            if (leaveWhenDone) onLeave()
+        }
+    }
+    if (!asking) return
+    val photos = if (pending == 1) "1 photo is" else "$pending photos are"
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { asking = false },
+        title = { Text("Still developing") },
+        text = {
+            Text(
+                "$photos still being processed. They're already saved, but if you close the app now " +
+                    "they may not finish, and will stay without their recipe, border or date stamp."
+            )
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = { asking = false; leaveWhenDone = true }) {
+                Text("Close when done")
+            }
+        },
+        dismissButton = {
+            androidx.compose.foundation.layout.Row {
+                androidx.compose.material3.TextButton(onClick = { asking = false; onLeave() }) {
+                    Text("Close anyway")
+                }
+                androidx.compose.material3.TextButton(onClick = { asking = false }) { Text("Keep open") }
+            }
+        }
+    )
 }
