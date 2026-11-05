@@ -90,9 +90,16 @@ private fun CameraCharacteristics.maxResOutput(): Pair<Size, Int>? {
     fun best(format: Int): Size? = map.getOutputSizes(format).orEmpty()
         .filter { abs(it.width.toFloat() / it.height - 4f / 3f) < 0.02f }
         .maxByOrNull { it.width.toLong() * it.height }
-    best(ImageFormat.JPEG)?.let { return it to ImageFormat.JPEG }
-    best(ImageFormat.YUV_420_888)?.let { return it to ImageFormat.YUV_420_888 }
-    return null
+    // The full-resolution map often repeats the normal sizes for JPEG and lists the true full
+    // size only for YUV / RAW, so take the largest across JPEG and YUV (JPEG when it ties).
+    val jpeg = best(ImageFormat.JPEG)
+    val yuv = best(ImageFormat.YUV_420_888)
+    fun area(s: Size?) = s?.let { it.width.toLong() * it.height } ?: 0L
+    return when {
+        jpeg == null && yuv == null -> null
+        area(jpeg) >= area(yuv) -> jpeg!! to ImageFormat.JPEG
+        else -> yuv!! to ImageFormat.YUV_420_888
+    }
 }
 
 /** What this camera reports about full-resolution mode, for the PRO panel's diagnostic line. */

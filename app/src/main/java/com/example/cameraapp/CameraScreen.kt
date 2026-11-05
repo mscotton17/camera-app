@@ -690,7 +690,7 @@ fun CameraScreen() {
                             append("Shooting ${jpegTarget.width} \u00D7 ${jpegTarget.height} in full-resolution mode. ")
                             append("The viewfinder pauses for about a second while each shot is taken.")
                         } else if (actual != null) append("Shooting ${actual.width} \u00D7 ${actual.height}. ")
-                        if (sensor != null && lens?.maxRes == null && sensor * 10 > (sizes.firstOrNull()?.mpTenths ?: 0)) {
+                        if (sensor != null && sizes.none { it.maxRes } && sensor * 10 > (sizes.firstOrNull()?.mpTenths ?: 0)) {
                             append("The sensor is $sensor MP, but this phone doesn't offer its full-resolution mode to other apps. ")
                             lens?.fullResReport?.let { append("[$it]") }
                         }
