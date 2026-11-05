@@ -27,6 +27,10 @@ import androidx.compose.animation.core.LinearEasing
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.platform.LocalView
+import android.view.Surface
 import androidx.compose.foundation.layout.navigationBars
 import kotlinx.coroutines.Job
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -169,6 +173,9 @@ fun CameraScreen() {
     var menuOpen by remember { mutableStateOf(false) }
     var timerSec by rememberSaveable { mutableIntStateOf(0) }
     var countdown by remember { mutableIntStateOf(0) }
+    // Display rotation (Surface.ROTATION_*), kept current even across 90 <-> 270 flips.
+    val rootView = LocalView.current
+    var displayRotation by remember { mutableIntStateOf(rootView.display?.rotation ?: Surface.ROTATION_0) }
     var countdownJob by remember { mutableStateOf<Job?>(null) }
     val countdownSweep = remember { Animatable(0f) }
     val hud by telemetry.state
@@ -335,6 +342,7 @@ fun CameraScreen() {
             override fun onDisplayChanged(displayId: Int) {
                 val display = previewView.display ?: return
                 if (display.displayId != displayId) return
+                displayRotation = display.rotation
                 bound?.let {
                     it.imageCapture.targetRotation = display.rotation
                     it.preview.targetRotation = display.rotation
@@ -1086,6 +1094,29 @@ fun CameraScreen() {
                 }
             )
         } else if (isLandscape) {
+            // Recipes keep their portrait position and orientation relative to the phone: the
+            // same strip, turned 90 degrees, in the band between the image and the shutter.
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val density = LocalDensity.current
+                val full = previewImageRect(androidx.compose.ui.geometry.Size(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat()))
+                val endInset = WindowInsets.safeDrawing.getRight(density, LayoutDirection.Ltr)
+                val shutterLeft = constraints.maxWidth - endInset - with(density) { (24.dp + 80.dp).toPx() }
+                val strip = with(density) { 40.dp.toPx() }
+                val gap = shutterLeft - full.right
+                val centerX = if (gap >= strip) full.right + gap / 2f else shutterLeft - strip / 2f
+                val length = constraints.maxHeight.toFloat()
+                // Phone turned left (top to the left): the strip reads bottom-to-top; turned
+                // right: top-to-bottom. Either way it lies just as it does in portrait.
+                val angle = if (displayRotation == Surface.ROTATION_270) 90f else -90f
+                RecipeCarousel(
+                    allRecipes, selectedRecipe?.id, selectRecipe,
+                    Modifier
+                        .offset { IntOffset((centerX - length / 2f).roundToInt(), ((constraints.maxHeight - strip) / 2f).roundToInt()) }
+                        .requiredSize(with(density) { length.toDp() }, 40.dp)
+                        .graphicsLayer { rotationZ = angle }
+                        .padding(horizontal = 12.dp)
+                )
+            }
             // Landscape: controls stacked on the right edge, shutter centred under the thumb.
             Row(
                 modifier = Modifier
@@ -1098,16 +1129,10 @@ fun CameraScreen() {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(
-                    verticalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterVertically),
+                    verticalArrangement = Arrangement.spacedBy(40.dp, Alignment.CenterVertically),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     switchButton(Modifier)
-                    // Recipes stay just above the shutter, swiping left / right as in portrait.
-                    RecipeCarousel(
-                        allRecipes, selectedRecipe?.id, selectRecipe,
-                        Modifier.width(120.dp),
-                        compact = true
-                    )
                     shutterButton(Modifier)
                     // Same height as the switch button so the shutter stays centred.
                     Box(Modifier.height(52.dp), contentAlignment = Alignment.Center) { proButton(Modifier) }
