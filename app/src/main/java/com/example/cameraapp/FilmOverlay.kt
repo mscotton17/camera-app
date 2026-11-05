@@ -15,11 +15,23 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import kotlin.math.min
 
-/** Where the 4:3 camera image sits inside a FIT_CENTER preview of [size]. */
-fun previewImageRect(size: Size): Rect {
+/**
+ * Where the 4:3 camera image sits on a screen of [size]. With a recipe [aspect] crop, the image
+ * is enlarged until the cropped frame fills as much of the screen as it can (the parts that
+ * get cropped away may run off-screen), so a crop never makes the picture smaller.
+ */
+fun previewImageRect(size: Size, aspect: AspectRatio = AspectRatio.NATIVE): Rect {
     val ratio = if (size.height > size.width) 3f / 4f else 4f / 3f
-    val w = min(size.width, size.height * ratio)
-    val h = w / ratio
+    var w = min(size.width, size.height * ratio)
+    var h = w / ratio
+    if (aspect != AspectRatio.NATIVE) {
+        val crop = previewCropRect(Rect(0f, 0f, w, h), aspect)
+        val scale = min(size.width / crop.width, size.height / crop.height)
+        if (scale > 1f) {
+            w *= scale
+            h *= scale
+        }
+    }
     val left = (size.width - w) / 2f
     val top = (size.height - h) / 2f
     return Rect(left, top, left + w, top + h)
@@ -39,7 +51,7 @@ fun previewCropRect(image: Rect, aspect: AspectRatio): Rect {
 fun FilmFrameOverlay(recipe: FilmRecipe, modifier: Modifier = Modifier) {
     if (recipe.aspect == AspectRatio.NATIVE && recipe.border == BorderStyle.NONE && !recipe.dateStamp) return
     Canvas(modifier) {
-        val image = previewImageRect(size)
+        val image = previewImageRect(size, recipe.aspect)
         val crop = previewCropRect(image, recipe.aspect)
         val mask = Color.Black.copy(alpha = 0.9f)
         // Aspect crop: darken the parts of the frame that won't be saved.

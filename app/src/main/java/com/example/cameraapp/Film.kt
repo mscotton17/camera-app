@@ -280,7 +280,7 @@ data class FilmRecipe(
     fun curve(channel: CurveChannel): List<Float> = curves[channel] ?: NeutralCurve
 }
 
-/** Built-in recipes. There's no "no recipe" option: the first one is the default. */
+/** Built-in recipes (all 3:2). There's no "no recipe" option: the first one is the default. */
 val FilmRecipes: List<FilmRecipe> = listOf(
     // Reggie's HP5: punchy black and white through a red filter — deep contrast, dark skies,
     // fine organic grain that sits mostly in the shadows.
@@ -294,6 +294,7 @@ val FilmRecipes: List<FilmRecipe> = listOf(
         vignette = 0.15f, vignetteFeather = 0.75f, vignetteRoundness = 1.0f,
         grain = 0.025f, grainSize = 1.0f, grainColor = 0f, grainRoughness = 0.25f,
         grainShadows = 1.1f, grainMids = 1.0f, grainHighlights = 0.2f,
+        aspect = AspectRatio.THREE_TWO,
         whiteBalance = WhiteBalance.AUTO, defaultEvOn = true, defaultEv = 0f,
     ),
     // Pushed HP5: crisp contrast, punchy micro-texture, gentle sky separation through a
@@ -338,6 +339,7 @@ val FilmRecipes: List<FilmRecipe> = listOf(
         vignette = 0.18f, vignetteFeather = 0.80f, vignetteRoundness = 1.0f,
         grain = 0.025f, grainSize = 1.0f, grainColor = 0.20f, grainColorBias = 0.65f, grainRoughness = 0.20f,
         grainShadows = 1.1f, grainMids = 1.0f, grainHighlights = 0.2f,
+        aspect = AspectRatio.THREE_TWO,
         whiteBalance = WhiteBalance.AUTO, defaultEvOn = true, defaultEv = 1f / 3f,
     ),
 )
