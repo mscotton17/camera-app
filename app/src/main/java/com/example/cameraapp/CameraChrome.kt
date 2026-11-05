@@ -28,6 +28,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.foundation.layout.wrapContentWidth
+import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.getValue
@@ -607,10 +612,108 @@ fun RecipeCarousel(
             Name(next, false, Modifier.fillMaxWidth())
         }
     } else {
-        Row(modifier.then(swipe), verticalAlignment = Alignment.CenterVertically) {
-            Name(prev, false, Modifier.weight(1f))
-            Name(current, true, Modifier.weight(1.5f))
-            Name(next, false, Modifier.weight(1f))
+        SlidingRecipeStrip(recipes, index, onSelect, modifier)
+    }
+}
+
+/**
+ * The portrait recipe strip, like a camera app's mode switcher: the names slide with your
+ * finger and settle on the nearest one (a quick flick carries on to the next), and the one in
+ * the middle is selected. Tapping a side name slides it to the middle.
+ */
+@Composable
+private fun SlidingRecipeStrip(
+    recipes: List<FilmRecipe>,
+    index: Int,
+    onSelect: (String) -> Unit,
+    modifier: Modifier,
+) {
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val latestRecipes by androidx.compose.runtime.rememberUpdatedState(recipes)
+    val latestIndex by androidx.compose.runtime.rememberUpdatedState(index)
+    val latestOnSelect by androidx.compose.runtime.rememberUpdatedState(onSelect)
+    // Strip position in items: 1.0 means recipe 1 is in the middle.
+    var pos by remember { androidx.compose.runtime.mutableFloatStateOf(index.toFloat()) }
+    var dragging by remember { mutableStateOf(false) }
+    var settleJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    fun settleTo(target: Int) {
+        settleJob?.cancel()
+        settleJob = scope.launch {
+            androidx.compose.animation.core.animate(
+                pos, target.toFloat(),
+                animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.85f, stiffness = 380f)
+            ) { v, _ -> pos = v }
+        }
+    }
+    // Selection changed elsewhere (a tap, or a swipe on the viewfinder): slide to it.
+    androidx.compose.runtime.LaunchedEffect(index) { if (!dragging) settleTo(index) }
+
+    androidx.compose.foundation.layout.BoxWithConstraints(modifier.clipToBounds()) {
+        val itemW = maxWidth / 2.4f
+        val itemPx = with(androidx.compose.ui.platform.LocalDensity.current) { itemW.toPx() }
+        val drag = Modifier.pointerInput(itemPx) {
+            val tracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
+            detectHorizontalDragGestures(
+                onDragStart = {
+                    dragging = true
+                    settleJob?.cancel()
+                    tracker.resetTracking()
+                },
+                onDragEnd = {
+                    dragging = false
+                    val v = tracker.calculateVelocity().x
+                    // Where a flick would carry it, at most one recipe past where it was let go.
+                    val projected = (pos - v / itemPx * 0.15f).coerceIn(pos - 1f, pos + 1f)
+                    val target = projected.roundToInt().coerceIn(0, latestRecipes.lastIndex)
+                    settleTo(target)
+                    if (target != latestIndex) latestOnSelect(latestRecipes[target].id)
+                },
+                onDragCancel = {
+                    dragging = false
+                    settleTo(latestIndex)
+                }
+            ) { change, dx ->
+                tracker.addPosition(change.uptimeMillis, change.position)
+                pos = (pos - dx / itemPx).coerceIn(-0.35f, latestRecipes.lastIndex + 0.35f)
+            }
+        }
+        Box(Modifier.fillMaxSize().then(drag)) {
+            recipes.forEachIndexed { i, r ->
+                val d = i - pos
+                val ad = abs(d)
+                if (ad > 2.5f) return@forEachIndexed
+                val sel = (1f - ad).coerceIn(0f, 1f)
+                Box(
+                    Modifier
+                        .align(Alignment.Center)
+                        .width(itemW)
+                        .graphicsLayer {
+                            translationX = d * itemPx
+                            val sc = 0.87f + 0.13f * sel
+                            scaleX = sc
+                            scaleY = sc
+                            alpha = (1f - (ad - 1f).coerceAtLeast(0f) * 0.8f).coerceIn(0f, 1f)
+                        }
+                        .clip(RoundedCornerShape(50))
+                        .clickable { if (i != latestIndex) latestOnSelect(r.id) }
+                        .semantics {
+                            contentDescription = if (i == index) "Recipe ${r.label}, selected. Swipe to change." else "Switch to ${r.label}"
+                        }
+                        .padding(vertical = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = r.label,
+                        color = androidx.compose.ui.graphics.lerp(Color.White.copy(alpha = 0.55f), HudAmber, sel),
+                        fontSize = 15.sp,
+                        fontWeight = if (sel > 0.5f) FontWeight.SemiBold else FontWeight.Normal,
+                        letterSpacing = 0.5.sp,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.wrapContentWidth(unbounded = true)
+                    )
+                }
+            }
         }
     }
 }

@@ -46,6 +46,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -616,6 +617,8 @@ fun CameraScreen() {
         recipe?.let { FilmFrameOverlay(it, Modifier.fillMaxSize(), deviceOrientation, vfArea) }
 
         // Gesture layer over the preview: tap to focus/meter.
+        val swipeRecipes by androidx.compose.runtime.rememberUpdatedState(allRecipes)
+        val swipeSelectedId by androidx.compose.runtime.rememberUpdatedState(selectedRecipe?.id)
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -637,6 +640,27 @@ fun CameraScreen() {
                         focusPoint = offset
                         focusKey++
                     }
+                }
+                // Swipe sideways across the viewfinder to change recipe, like changing mode.
+                .pointerInput(Unit) {
+                    var total = 0f
+                    val threshold = 48.dp.toPx()
+                    detectHorizontalDragGestures(
+                        onDragStart = { total = 0f },
+                        onDragEnd = {
+                            val i = swipeRecipes.indexOfFirst { it.id == swipeSelectedId }
+                            val t = when {
+                                total < -threshold -> i + 1
+                                total > threshold -> i - 1
+                                else -> i
+                            }
+                            val to = swipeRecipes.getOrNull(t)
+                            if (i >= 0 && t != i && to != null) {
+                                recipeId = to.id
+                                if (settings.hapticsOn) haptics.tick(opening = false)
+                            }
+                        }
+                    ) { _, d -> total += d }
                 }
         )
 
