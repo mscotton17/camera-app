@@ -249,10 +249,13 @@ fun applyRecipe(bitmap: Bitmap, recipe: FilmRecipe, rect: Rect = Rect(0, 0, bitm
         BlurMap(base, BLOOM_RADIUS * recipe.bloomRadius) { smoothstep(recipe.bloomThreshold, 1f, it) }
     } else null
 
-    // Lens effects read neighbouring pixels, so they work from an untouched copy.
-    val src: IntArray? = if (recipe.hasOptics) IntArray(rw * rh).also {
-        bitmap.getPixels(it, 0, rw, rect.left, rect.top, rw, rh)
-    } else null
+    // Lens effects read neighbouring pixels, so they read from an untouched copy of the rows
+    // around the strip being processed: rows [srcTop, srcTop + srcRows). Copying only a strip
+    // (not the whole image, ~200 MB at 50 MP) keeps memory small at high resolutions.
+    val hasOptics = recipe.hasOptics
+    var src = IntArray(0)
+    var srcTop = 0
+    var srcRows = 0
 
     val clarity = recipe.clarity * CLARITY_GAIN
     val halation = recipe.halation * HALATION_GAIN
@@ -280,15 +283,17 @@ fun applyRecipe(bitmap: Bitmap, recipe: FilmRecipe, rect: Rect = Rect(0, 0, bitm
     val caShift = recipe.chromaticAberration * CA_SHIFT * rw
     val cornerBlur = recipe.cornerSoftness * CORNER_BLUR * rw
 
+    /** Original pixel at ([x], [y]) from the current strip copy (clamped to it). */
+    fun srcPixel(x: Int, y: Int): Int =
+        src[(y.coerceIn(srcTop, srcTop + srcRows - 1) - srcTop) * rw + x.coerceIn(0, rw - 1)]
+
     fun srcAt(fx: Float, fy: Float, out: FloatArray) {
-        val s = src!!
         val x0 = floor(fx).toInt().coerceIn(0, rw - 1)
-        val y0 = floor(fy).toInt().coerceIn(0, rh - 1)
+        val y0 = floor(fy).toInt()
         val x1 = min(x0 + 1, rw - 1)
-        val y1 = min(y0 + 1, rh - 1)
-        val tx = (fx - x0).coerceIn(0f, 1f)
+        val tx = (fx - floor(fx)).coerceIn(0f, 1f)
         val ty = (fy - y0).coerceIn(0f, 1f)
-        val a = s[y0 * rw + x0]; val b = s[y0 * rw + x1]; val c = s[y1 * rw + x0]; val d = s[y1 * rw + x1]
+        val a = srcPixel(x0, y0); val b = srcPixel(x1, y0); val c = srcPixel(x0, y0 + 1); val d = srcPixel(x1, y0 + 1)
         for (k in 0 until 3) {
             val sh = 16 - k * 8
             val va = ((a shr sh) and 0xFF).toFloat(); val vb = ((b shr sh) and 0xFF).toFloat()
@@ -319,8 +324,11 @@ fun applyRecipe(bitmap: Bitmap, recipe: FilmRecipe, rect: Rect = Rect(0, 0, bitm
     }
 
     val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
-    val band = (rh + threads - 1) / threads
     val pool = ForkJoinPool.commonPool()
+
+    /** Processes rows [yStart, yEnd) across all cores. */
+    fun processRows(yStart: Int, yEnd: Int) {
+    val band = (yEnd - yStart + threads - 1) / threads
     (0 until threads).map { t ->
         pool.submit(Runnable {
             val row = IntArray(rw)
@@ -329,8 +337,8 @@ fun applyRecipe(bitmap: Bitmap, recipe: FilmRecipe, rect: Rect = Rect(0, 0, bitm
             val hsv = FloatArray(3)
             val tmp = FloatArray(3)
             val acc = FloatArray(3)
-            val start = t * band
-            val end = min(rh, start + band)
+            val start = yStart + t * band
+            val end = min(yEnd, start + band)
             for (y in start until end) {
                 bitmap.getPixels(row, 0, rw, rect.left, rect.top + y, rw, 1)
                 for (x in 0 until rw) {
@@ -344,7 +352,7 @@ fun applyRecipe(bitmap: Bitmap, recipe: FilmRecipe, rect: Rect = Rect(0, 0, bitm
                     val rn = dist / halfDiagonal
 
                     // Lens: corner softness, chromatic aberration and sharpening.
-                    if (src != null) {
+                    if (hasOptics) {
                         val r2 = rn * rn
                         val blurR = cornerBlur * r2
                         lensSample(x.toFloat(), y.toFloat(), blurR, px, acc)
@@ -357,11 +365,11 @@ fun applyRecipe(bitmap: Bitmap, recipe: FilmRecipe, rect: Rect = Rect(0, 0, bitm
                             lensSample(x - ux, y - uy, blurR, tmp, acc); b = tmp[2]
                         }
                         if (recipe.sharpen != 0f) {
-                            val n = src[max(0, y - 1) * rw + x]
-                            val so = src[min(rh - 1, y + 1) * rw + x]
-                            val e = src[y * rw + min(rw - 1, x + 1)]
-                            val w = src[y * rw + max(0, x - 1)]
-                            val sc = src[y * rw + x]
+                            val n = srcPixel(x, max(0, y - 1))
+                            val so = srcPixel(x, min(rh - 1, y + 1))
+                            val e = srcPixel(x + 1, y)
+                            val w = srcPixel(x - 1, y)
+                            val sc = srcPixel(x, y)
                             val k = recipe.sharpen * 1.2f
                             val avgR = (((n shr 16) and 0xFF) + ((so shr 16) and 0xFF) + ((e shr 16) and 0xFF) + ((w shr 16) and 0xFF)) / 4f
                             val avgG = (((n shr 8) and 0xFF) + ((so shr 8) and 0xFF) + ((e shr 8) and 0xFF) + ((w shr 8) and 0xFF)) / 4f
@@ -522,6 +530,34 @@ fun applyRecipe(bitmap: Bitmap, recipe: FilmRecipe, rect: Rect = Rect(0, 0, bitm
             }
         })
     }.forEach { it.get() }
+    }
+
+    if (!hasOptics) {
+        processRows(0, rh)
+    } else {
+        // Strip by strip: each strip's source copy includes enough original rows above
+        // (kept from the previous strip, since those are already overwritten) and below.
+        val halo = (cornerBlur + caShift).toInt() + 3
+        val strip = 256
+        var tail = IntArray(0)
+        var tailRows = 0
+        var y0 = 0
+        while (y0 < rh) {
+            val y1 = min(rh, y0 + strip)
+            val top = y0 - tailRows
+            val bottom = min(rh, y1 + halo)
+            val buf = IntArray((bottom - top) * rw)
+            System.arraycopy(tail, 0, buf, 0, tailRows * rw)
+            bitmap.getPixels(buf, tailRows * rw, rw, rect.left, rect.top + y0, rw, bottom - y0)
+            src = buf
+            srcTop = top
+            srcRows = bottom - top
+            processRows(y0, y1)
+            tailRows = min(halo, y1 - top)
+            tail = buf.copyOfRange((y1 - tailRows - top) * rw, (y1 - top) * rw)
+            y0 = y1
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

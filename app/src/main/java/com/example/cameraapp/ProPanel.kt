@@ -37,6 +37,8 @@ class ProControl(
     val selected: Int,
     /** Why it can't be changed right now, if it can't. */
     val note: String? = null,
+    /** Extra detail shown under the choices. */
+    val info: String? = null,
     val onSelect: (Int) -> Unit = {},
 )
 
@@ -95,6 +97,9 @@ fun ProPanel(
                             onSelect = c.onSelect,
                             modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp)
                         )
+                    }
+                    if (c.info != null) {
+                        Text(c.info, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
                     }
                 }
             }

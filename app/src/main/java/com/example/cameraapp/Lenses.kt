@@ -6,6 +6,8 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.os.Build
 import android.util.Log
+import android.util.Size
+import android.graphics.ImageFormat
 import android.util.Range
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
@@ -41,7 +43,36 @@ data class Lens(
     /** ImageCapture.OUTPUT_FORMAT_* values this lens can capture. */
     val supportedFormats: Set<Int>,
     val exposure: ExposureCaps,
+    /** 4:3 JPEG sizes this lens offers apps, largest first (one per megapixel count). */
+    val jpegSizes: List<JpegSize> = emptyList(),
+    /** The sensor's full resolution in megapixels, if it reports one larger than apps get. */
+    val sensorMaxMp: Int? = null,
 )
+
+/** A JPEG capture size; [highRes] sizes need CameraX's "prefer higher resolution" mode. */
+data class JpegSize(val width: Int, val height: Int, val highRes: Boolean) {
+    val megapixels: Int get() = ((width.toLong() * height + 500_000L) / 1_000_000L).toInt()
+    val size: Size get() = Size(width, height)
+}
+
+private fun CameraCharacteristics.jpegSizes(): List<JpegSize> {
+    val map = get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return emptyList()
+    val normal = map.getOutputSizes(ImageFormat.JPEG).orEmpty().map { JpegSize(it.width, it.height, false) }
+    val high = map.getHighResolutionOutputSizes(ImageFormat.JPEG).orEmpty().map { JpegSize(it.width, it.height, true) }
+    return (high + normal)
+        .filter { abs(it.width.toFloat() / it.height - 4f / 3f) < 0.02f }
+        .sortedByDescending { it.width.toLong() * it.height }
+        .distinctBy { it.megapixels }
+        .filter { it.megapixels >= 2 }
+        .take(4)
+}
+
+/** Full sensor resolution (Android 12+ "maximum resolution" mode), in megapixels. */
+private fun CameraCharacteristics.sensorMaxMp(): Int? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
+    val size = get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE_MAXIMUM_RESOLUTION) ?: return null
+    return ((size.width.toLong() * size.height + 500_000L) / 1_000_000L).toInt()
+}
 
 /** What manual exposure control a lens allows. */
 data class ExposureCaps(
@@ -130,7 +161,8 @@ fun enumerateLenses(context: Context, provider: ProcessCameraProvider): LensSet 
                 val crop = chars.cropFactor()
                 found += Lens(
                     logicalId, info, null, facing, chars.equivFocalMm(crop), chars.focalMm(), crop,
-                    formats, exposureCaps(chars, chars)
+                    formats, exposureCaps(chars, chars),
+                    jpegSizes = chars.jpegSizes(), sensorMaxMp = chars.sensorMaxMp()
                 )
                 continue
             }
@@ -156,6 +188,8 @@ fun enumerateLenses(context: Context, provider: ProcessCameraProvider): LensSet 
                     cropFactor = crop,
                     supportedFormats = if (isMain || pc.hasRaw()) formats else formats - RawFormats,
                     exposure = exposureCaps(if (isMain) chars else pc, chars),
+                    jpegSizes = (if (isMain) chars else pc).jpegSizes(),
+                    sensorMaxMp = (if (isMain) chars else pc).sensorMaxMp(),
                 )
             }
         } catch (e: Exception) {

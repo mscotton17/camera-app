@@ -17,6 +17,7 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.lifecycle.awaitInstance
 import androidx.camera.view.PreviewView
@@ -146,6 +147,9 @@ fun CameraScreen() {
     var openPicker by remember { mutableStateOf<HudItem?>(null) }
     // Not saved: exposure is automatic every time the app opens.
     var exposure by remember { mutableStateOf(ExposureSettings()) }
+    // Chosen JPEG megapixels (null = the highest the lens offers) and what CameraX actually bound.
+    var mpChoice by rememberSaveable { mutableStateOf<Int?>(null) }
+    var jpegResolution by remember { mutableStateOf<android.util.Size?>(null) }
     // Exposure compensation in EV; also resets to 0 on launch.
     var evComp by remember { mutableFloatStateOf(0f) }
     var focusPoint by remember { mutableStateOf<Offset?>(null) }
@@ -442,7 +446,11 @@ fun CameraScreen() {
 
     // Bind Preview + ImageCapture to the selected lens in the selected format. Rebinds when
     // either changes and unbinds when this composable leaves.
-    DisposableEffect(lifecycleOwner, provider, lens?.key, activeFormat) {
+    // JPEG resolution: the highest the lens offers unless one is chosen in the PRO panel.
+    val jpegTarget: JpegSize? = lens?.jpegSizes?.let { sizes ->
+        sizes.firstOrNull { it.megapixels == mpChoice } ?: sizes.firstOrNull()
+    }
+    DisposableEffect(lifecycleOwner, provider, lens?.key, activeFormat, jpegTarget) {
         val p = provider
         if (p == null || lens == null) return@DisposableEffect onDispose { }
 
@@ -454,7 +462,26 @@ fun CameraScreen() {
             .setOutputFormat(activeFormat.outputFormat)
             .setFlashMode(flash.mode)
         // RAW is always full sensor resolution; only constrain JPEG-only capture.
-        if (activeFormat == CaptureFormat.JPEG) captureBuilder.setResolutionSelector(FourByThree)
+        if (activeFormat == CaptureFormat.JPEG) {
+            captureBuilder.setResolutionSelector(
+                if (jpegTarget == null) {
+                    FourByThree
+                } else {
+                    ResolutionSelector.Builder()
+                        .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                        .setResolutionStrategy(
+                            ResolutionStrategy(jpegTarget.size, ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER)
+                        )
+                        // The largest sizes are "high resolution" ones that can't stream at full
+                        // frame rate; CameraX only offers them when asked to prefer resolution.
+                        .setAllowedResolutionMode(
+                            if (jpegTarget.highRes) ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE
+                            else ResolutionSelector.PREFER_CAPTURE_RATE_OVER_HIGHER_RESOLUTION
+                        )
+                        .build()
+                }
+            )
+        }
         previewView.display?.rotation?.let {
             previewBuilder.setTargetRotation(it)
             captureBuilder.setTargetRotation(it)
@@ -473,10 +500,16 @@ fun CameraScreen() {
             telemetry.physicalId = lens.physicalId
             val camera = p.bindToLifecycle(lifecycleOwner, lens.cameraInfo.cameraSelector, preview, capture)
             bound = BoundCamera(camera, preview, capture, activeFormat)
+            jpegResolution = capture.resolutionInfo?.resolution
         } catch (e: Exception) {
             Log.e(TAG, "Binding ${lens.key} as $activeFormat failed", e)
             bound = null
-            if (activeFormat != CaptureFormat.JPEG) {
+            val sizes = lens.jpegSizes
+            val smaller = jpegTarget?.let { t -> sizes.firstOrNull { it.megapixels < t.megapixels } }
+            if (activeFormat == CaptureFormat.JPEG && jpegTarget != null && smaller != null) {
+                Toast.makeText(context, "${jpegTarget.megapixels} MP isn't available here; using ${smaller.megapixels} MP", Toast.LENGTH_SHORT).show()
+                mpChoice = smaller.megapixels
+            } else if (activeFormat != CaptureFormat.JPEG) {
                 Toast.makeText(context, "${activeFormat.label} isn't available on this lens", Toast.LENGTH_SHORT).show()
                 format = CaptureFormat.JPEG
             } else if (lens.physicalId != null) {
@@ -626,6 +659,35 @@ fun CameraScreen() {
                 note = if (fullManual) "Not used while both ISO and shutter are manual" else null,
                 onSelect = { i -> evComp = EvOptions[i] }
             ),
+            run {
+                val sizes = lens?.jpegSizes.orEmpty()
+                val actual = jpegResolution
+                val actualMp = actual?.let { ((it.width.toLong() * it.height + 500_000L) / 1_000_000L).toInt() }
+                val sensor = lens?.sensorMaxMp
+                ProControl(
+                    label = "RESOLUTION",
+                    value = when {
+                        activeFormat != CaptureFormat.JPEG -> "STANDARD"
+                        actualMp != null -> "$actualMp MP"
+                        else -> jpegTarget?.let { "${it.megapixels} MP" } ?: "--"
+                    },
+                    auto = mpChoice == null,
+                    options = sizes.map { "${it.megapixels} MP" },
+                    selected = sizes.indexOf(jpegTarget),
+                    note = when {
+                        sizes.isEmpty() -> "This lens doesn't report its sizes"
+                        activeFormat != CaptureFormat.JPEG -> "Resolution applies to JPG; RAW and RAW+JPG use the camera's standard size"
+                        else -> null
+                    },
+                    info = buildString {
+                        if (actual != null) append("Shooting ${actual.width} \u00D7 ${actual.height}. ")
+                        if (sensor != null && sensor > (sizes.firstOrNull()?.megapixels ?: 0)) {
+                            append("The sensor is $sensor MP, but its full-resolution mode isn't open to other apps through CameraX.")
+                        }
+                    }.ifBlank { null },
+                    onSelect = { i -> mpChoice = sizes[i].megapixels }
+                )
+            },
             ProControl(
                 label = "APERTURE",
                 value = formatAperture(resolvedExposure.aperture ?: hud.apertureF),
