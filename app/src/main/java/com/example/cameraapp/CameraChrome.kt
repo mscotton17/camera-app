@@ -3,6 +3,9 @@ package com.example.cameraapp
 import android.content.Context
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -479,5 +482,77 @@ fun CountdownOverlay(seconds: Int, modifier: Modifier = Modifier) {
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Light
         )
+    }
+}
+
+/**
+ * Swipeable recipe carousel (where camera apps show their modes): the current recipe in the
+ * middle with its neighbours dimmed either side. Swipe, or tap a neighbour, to change recipe.
+ * [vertical] stacks it top to bottom (landscape side bar) and swipes up / down.
+ */
+@Composable
+fun RecipeCarousel(
+    recipes: List<FilmRecipe>,
+    selectedId: String?,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    vertical: Boolean = false,
+) {
+    if (recipes.isEmpty()) return
+    val index = recipes.indexOfFirst { it.id == selectedId }.coerceAtLeast(0)
+    val prev = recipes.getOrNull(index - 1)
+    val next = recipes.getOrNull(index + 1)
+    val current = recipes[index]
+    // Read inside the gesture so it always sees the latest neighbours.
+    val latestPrev = androidx.compose.runtime.rememberUpdatedState(prev)
+    val latestNext = androidx.compose.runtime.rememberUpdatedState(next)
+    val swipe = Modifier.pointerInput(vertical) {
+        var total = 0f
+        val threshold = 40.dp.toPx()
+        val onEnd = {
+            when {
+                total < -threshold -> latestNext.value?.let { onSelect(it.id) }
+                total > threshold -> latestPrev.value?.let { onSelect(it.id) }
+            }
+            total = 0f
+        }
+        if (vertical) {
+            detectVerticalDragGestures(onDragEnd = onEnd, onDragCancel = { total = 0f }) { _, d -> total += d }
+        } else {
+            detectHorizontalDragGestures(onDragEnd = onEnd, onDragCancel = { total = 0f }) { _, d -> total += d }
+        }
+    }
+
+    @Composable
+    fun Name(r: FilmRecipe?, selected: Boolean, m: Modifier) {
+        Text(
+            text = r?.label ?: "",
+            color = if (selected) HudAmber else Color.White.copy(alpha = 0.55f),
+            fontSize = if (selected) 15.sp else 13.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            letterSpacing = 0.5.sp,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = m
+                .clip(RoundedCornerShape(50))
+                .then(if (r != null && !selected) Modifier.clickable { onSelect(r.id) } else Modifier)
+                .padding(horizontal = 6.dp, vertical = 6.dp)
+                .semantics { if (r != null) contentDescription = if (selected) "Recipe ${r.label}, selected" else "Switch to ${r.label}" }
+        )
+    }
+
+    if (vertical) {
+        Column(modifier.then(swipe), horizontalAlignment = Alignment.CenterHorizontally) {
+            Name(prev, false, Modifier.fillMaxWidth())
+            Name(current, true, Modifier.fillMaxWidth())
+            Name(next, false, Modifier.fillMaxWidth())
+        }
+    } else {
+        Row(modifier.then(swipe), verticalAlignment = Alignment.CenterVertically) {
+            Name(prev, false, Modifier.weight(1f))
+            Name(current, true, Modifier.weight(1.5f))
+            Name(next, false, Modifier.weight(1f))
+        }
     }
 }

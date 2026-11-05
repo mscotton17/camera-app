@@ -650,6 +650,13 @@ fun CameraScreen() {
                 exposure = ExposureSettings()
             }
         }
+        // Recipe carousel (in place of PHOTO · PRO): swipe or tap a neighbour to switch.
+        val selectRecipe: (String) -> Unit = { id ->
+            if (id != selectedRecipe?.id) {
+                recipeId = id
+                if (settings.hapticsOn) haptics.tick(opening = false)
+            }
+        }
         val flashAvailable = !resolvedExposure.manualSensor && bound?.camera?.cameraInfo?.hasFlashUnit() == true
         val formatAvailable = lens != null && ImageCapture.OUTPUT_FORMAT_RAW in lens.supportedFormats
         val cycleFormat: () -> Unit = cycle@{
@@ -723,7 +730,9 @@ fun CameraScreen() {
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         topBar(Modifier.fillMaxWidth(), true)
-                        if (draft == null) ModeToggle(proMode, setMode, compact = true)
+                        if (draft == null) {
+                            RecipeCarousel(allRecipes, selectedRecipe?.id, selectRecipe, Modifier.fillMaxWidth(), vertical = true)
+                        }
                     }
                 }
             }
@@ -738,12 +747,14 @@ fun CameraScreen() {
                 val toggleHeight = with(density) { 40.dp.toPx() }
                 val gap = shutterTop - full.bottom
                 val y = if (gap >= toggleHeight) full.bottom + (gap - toggleHeight) / 2f else shutterTop - toggleHeight
-                ModeToggle(
-                    proMode, setMode,
+                RecipeCarousel(
+                    allRecipes, selectedRecipe?.id, selectRecipe,
                     Modifier
                         .align(Alignment.TopCenter)
                         .offset { IntOffset(0, y.roundToInt()) }
+                        .fillMaxWidth()
                         .height(40.dp)
+                        .padding(horizontal = 12.dp)
                 )
             }
             // Portrait: icon bar across the top.
