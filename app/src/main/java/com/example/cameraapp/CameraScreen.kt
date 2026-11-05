@@ -32,6 +32,9 @@ import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.platform.LocalView
 import android.view.Surface
+import android.view.OrientationEventListener
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.foundation.layout.navigationBars
 import kotlinx.coroutines.Job
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -167,6 +170,19 @@ fun CameraScreen() {
     // Display rotation (Surface.ROTATION_*), kept current even across 90 <-> 270 flips.
     val rootView = LocalView.current
     var displayRotation by remember { mutableIntStateOf(rootView.display?.rotation ?: Surface.ROTATION_0) }
+    // The screen is locked to portrait. How the phone is actually held (0/90/180/270 degrees,
+    // clockwise) turns the small controls in place and sets the saved photo's orientation.
+    var deviceOrientation by remember { mutableIntStateOf(0) }
+    // Running icon angle, always turning the short way round (270 -> 0 is +90, not -270).
+    var iconTarget by remember { mutableFloatStateOf(0f) }
+    val iconRotation by animateFloatAsState(iconTarget, tween(260), label = "iconRotation")
+    // Photo rotation for CameraX (Surface.ROTATION_*) from how the phone is held.
+    val captureRotation = when (deviceOrientation) {
+        90 -> Surface.ROTATION_270
+        180 -> Surface.ROTATION_180
+        270 -> Surface.ROTATION_90
+        else -> Surface.ROTATION_0
+    }
     var countdownJob by remember { mutableStateOf<Job?>(null) }
     val countdownSweep = remember { Animatable(0f) }
     val hud by telemetry.state
@@ -334,14 +350,37 @@ fun CameraScreen() {
                 val display = previewView.display ?: return
                 if (display.displayId != displayId) return
                 displayRotation = display.rotation
-                bound?.let {
-                    it.imageCapture.targetRotation = display.rotation
-                    it.preview.targetRotation = display.rotation
-                }
+                bound?.let { it.preview.targetRotation = display.rotation }
             }
         }
         displayManager.registerDisplayListener(listener, Handler(Looper.getMainLooper()))
         onDispose { displayManager.unregisterDisplayListener(listener) }
+    }
+
+    // Follow how the phone is held, snapping to the nearest quarter turn once it is clearly
+    // past the halfway point (so it doesn't flicker when held near 45 degrees).
+    DisposableEffect(Unit) {
+        val listener = object : OrientationEventListener(context) {
+            override fun onOrientationChanged(orientation: Int) {
+                if (orientation == ORIENTATION_UNKNOWN) return
+                var diff = (orientation - deviceOrientation) % 360
+                if (diff < 0) diff += 360
+                if (diff > 180) diff -= 360
+                if (kotlin.math.abs(diff) < 60) return
+                val snapped = ((orientation + 45) / 90 % 4) * 90
+                if (snapped == deviceOrientation) return
+                var turn = (-snapped - iconTarget) % 360f
+                if (turn < -180f) turn += 360f
+                if (turn > 180f) turn -= 360f
+                iconTarget += turn
+                deviceOrientation = snapped
+            }
+        }
+        if (listener.canDetectOrientation()) listener.enable()
+        onDispose { listener.disable() }
+    }
+    LaunchedEffect(bound, captureRotation) {
+        bound?.imageCapture?.targetRotation = captureRotation
     }
 
     // Picking a recipe applies its camera defaults (EV, format, lens), if it has any.
@@ -487,10 +526,8 @@ fun CameraScreen() {
                 }
             )
         }
-        previewView.display?.rotation?.let {
-            previewBuilder.setTargetRotation(it)
-            captureBuilder.setTargetRotation(it)
-        }
+        previewView.display?.rotation?.let { previewBuilder.setTargetRotation(it) }
+        captureBuilder.setTargetRotation(captureRotation)
         lens.physicalId?.let {
             previewBuilder.usePhysicalCamera(it)
             captureBuilder.usePhysicalCamera(it)
@@ -529,6 +566,7 @@ fun CameraScreen() {
         }
     }
 
+    CompositionLocalProvider(LocalIconRotation provides iconRotation) {
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         // The preview is sized to the (possibly enlarged) 4:3 image, so with a crop the cropped
         // frame fills the screen and the cropped-away parts run off the edges.
@@ -562,7 +600,7 @@ fun CameraScreen() {
         }
 
         // Aspect crop, border and date stamp as they'll appear on the photo.
-        recipe?.let { FilmFrameOverlay(it, Modifier.fillMaxSize()) }
+        recipe?.let { FilmFrameOverlay(it, Modifier.fillMaxSize(), deviceOrientation) }
 
         // Gesture layer over the preview: tap to focus/meter.
         Box(
@@ -864,7 +902,7 @@ fun CameraScreen() {
                         val request = MaxResRequest(
                             cameraId = l.cameraId,
                             info = fullRes,
-                            displayRotationDegrees = (previewView.display?.rotation ?: 0) * 90,
+                            displayRotationDegrees = captureRotation * 90,
                             frontFacing = l.facing == CameraSelector.LENS_FACING_FRONT,
                             ev = meteringEv,
                             manualShutterNs = if (resolvedExposure.manualSensor) resolvedExposure.shutterNs else null,
@@ -1210,5 +1248,6 @@ fun CameraScreen() {
                     .statusBarsPadding()
             )
         }
+    }
     }
 }

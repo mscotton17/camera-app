@@ -10,6 +10,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
@@ -48,7 +49,12 @@ fun previewCropRect(image: Rect, aspect: AspectRatio): Rect {
  * over the image edges (scaled to fit), and the date stamp where it will be printed.
  */
 @Composable
-fun FilmFrameOverlay(recipe: FilmRecipe, modifier: Modifier = Modifier) {
+fun FilmFrameOverlay(
+    recipe: FilmRecipe,
+    modifier: Modifier = Modifier,
+    /** How the phone is held (0/90/180/270, clockwise): the print's border and stamp follow it. */
+    deviceOrientation: Int = 0,
+) {
     if (recipe.aspect == AspectRatio.NATIVE && recipe.border == BorderStyle.NONE && !recipe.dateStamp) return
     Canvas(modifier) {
         val image = previewImageRect(size, recipe.aspect)
@@ -66,38 +72,51 @@ fun FilmFrameOverlay(recipe: FilmRecipe, modifier: Modifier = Modifier) {
                 style = Stroke(width = 1.dp.toPx())
             )
         }
-        if (recipe.border == BorderStyle.NONE) {
-            if (recipe.dateStamp) drawStamp(recipe, crop.left, crop.top, crop.width, crop.height)
-            return@Canvas
+        // Held sideways, the photo is saved sideways: draw the print turned to match, inside a
+        // frame with swapped sides centred on the crop.
+        val sideways = deviceOrientation == 90 || deviceOrientation == 270
+        val frame = if (sideways) {
+            Rect(crop.center.x - crop.height / 2f, crop.center.y - crop.width / 2f,
+                crop.center.x + crop.height / 2f, crop.center.y + crop.width / 2f)
+        } else crop
+        rotate(-deviceOrientation.toFloat(), pivot = crop.center) {
+            drawPrint(recipe, frame, mask)
         }
-        // Lay the finished print (image + border) over the crop, scaled to fit inside it.
-        val ins = borderInsets(recipe, crop.width.toInt().coerceAtLeast(1), crop.height.toInt().coerceAtLeast(1))
-        val outW = crop.width + ins.left + ins.right
-        val outH = crop.height + ins.top + ins.bottom
-        val s = min(crop.width / outW, crop.height / outH)
-        val ox = crop.left + (crop.width - outW * s) / 2f
-        val oy = crop.top + (crop.height - outH * s) / 2f
-        val borderArgb = if (recipe.border == BorderStyle.REBATE) 0xFF0C0C0C.toInt() else recipe.borderColor.argb
-        val borderColor = Color(borderArgb)
-        // Fill the strip between the crop and the scaled print first, then the border bands.
-        drawRect(mask, Offset(crop.left, crop.top), Size(crop.width, oy - crop.top))
-        drawRect(mask, Offset(crop.left, oy + outH * s), Size(crop.width, crop.bottom - oy - outH * s))
-        drawRect(mask, Offset(crop.left, crop.top), Size(ox - crop.left, crop.height))
-        drawRect(mask, Offset(ox + outW * s, crop.top), Size(crop.right - ox - outW * s, crop.height))
-        drawRect(borderColor, Offset(ox, oy), Size(outW * s, ins.top * s))
-        drawRect(borderColor, Offset(ox, oy + (ins.top + crop.height) * s), Size(outW * s, ins.bottom * s))
-        drawRect(borderColor, Offset(ox, oy), Size(ins.left * s, outH * s))
-        drawRect(borderColor, Offset(ox + (ins.left + crop.width) * s, oy), Size(ins.right * s, outH * s))
-        drawIntoCanvas { canvas ->
-            val nc = canvas.nativeCanvas
-            nc.save()
-            nc.translate(ox, oy)
-            nc.scale(s, s)
-            val imageRect = RectF(ins.left, ins.top, ins.left + crop.width, ins.top + crop.height)
-            drawBorderDetails(nc, recipe, imageRect, outW.toInt(), outH.toInt(), borderArgb)
-            if (recipe.dateStamp) drawDateStamp(nc, recipe, imageRect, System.currentTimeMillis())
-            nc.restore()
-        }
+    }
+}
+
+private fun DrawScope.drawPrint(recipe: FilmRecipe, crop: Rect, mask: Color) {
+    if (recipe.border == BorderStyle.NONE) {
+        if (recipe.dateStamp) drawStamp(recipe, crop.left, crop.top, crop.width, crop.height)
+        return
+    }
+    // Lay the finished print (image + border) over the crop, scaled to fit inside it.
+    val ins = borderInsets(recipe, crop.width.toInt().coerceAtLeast(1), crop.height.toInt().coerceAtLeast(1))
+    val outW = crop.width + ins.left + ins.right
+    val outH = crop.height + ins.top + ins.bottom
+    val s = min(crop.width / outW, crop.height / outH)
+    val ox = crop.left + (crop.width - outW * s) / 2f
+    val oy = crop.top + (crop.height - outH * s) / 2f
+    val borderArgb = if (recipe.border == BorderStyle.REBATE) 0xFF0C0C0C.toInt() else recipe.borderColor.argb
+    val borderColor = Color(borderArgb)
+    // Fill the strip between the crop and the scaled print first, then the border bands.
+    drawRect(mask, Offset(crop.left, crop.top), Size(crop.width, oy - crop.top))
+    drawRect(mask, Offset(crop.left, oy + outH * s), Size(crop.width, crop.bottom - oy - outH * s))
+    drawRect(mask, Offset(crop.left, crop.top), Size(ox - crop.left, crop.height))
+    drawRect(mask, Offset(ox + outW * s, crop.top), Size(crop.right - ox - outW * s, crop.height))
+    drawRect(borderColor, Offset(ox, oy), Size(outW * s, ins.top * s))
+    drawRect(borderColor, Offset(ox, oy + (ins.top + crop.height) * s), Size(outW * s, ins.bottom * s))
+    drawRect(borderColor, Offset(ox, oy), Size(ins.left * s, outH * s))
+    drawRect(borderColor, Offset(ox + (ins.left + crop.width) * s, oy), Size(ins.right * s, outH * s))
+    drawIntoCanvas { canvas ->
+        val nc = canvas.nativeCanvas
+        nc.save()
+        nc.translate(ox, oy)
+        nc.scale(s, s)
+        val imageRect = RectF(ins.left, ins.top, ins.left + crop.width, ins.top + crop.height)
+        drawBorderDetails(nc, recipe, imageRect, outW.toInt(), outH.toInt(), borderArgb)
+        if (recipe.dateStamp) drawDateStamp(nc, recipe, imageRect, System.currentTimeMillis())
+        nc.restore()
     }
 }
 

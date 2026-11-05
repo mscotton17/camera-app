@@ -186,12 +186,14 @@ fun SwitchCameraButton(enabled: Boolean, onClick: () -> Unit, modifier: Modifier
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Icon(
-            imageVector = Icons.Filled.Refresh,
-            contentDescription = "Switch camera",
-            tint = Color.White,
-            modifier = Modifier.size(28.dp)
-        )
+        RotateWithDevice {
+            Icon(
+                imageVector = Icons.Filled.Refresh,
+                contentDescription = "Switch camera",
+                tint = Color.White,
+                modifier = Modifier.size(28.dp)
+            )
+        }
     }
 }
 
@@ -360,12 +362,14 @@ fun ProButton(active: Boolean, open: Boolean, onClick: () -> Unit, modifier: Mod
             .semantics { contentDescription = if (active) "Pro controls, manual settings on" else "Pro controls" },
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            "PRO",
-            color = if (active || open) HudAmber else Color.White,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold
-        )
+        RotateWithDevice {
+            Text(
+                "PRO",
+                color = if (active || open) HudAmber else Color.White,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
     }
 }

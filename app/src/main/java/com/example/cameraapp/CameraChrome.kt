@@ -28,6 +28,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -181,7 +183,20 @@ private fun IconSlot(
             .clickable(enabled = enabled, onClick = onClick)
             .semantics { contentDescription = description },
         contentAlignment = Alignment.Center
-    ) { content() }
+    ) { RotateWithDevice { content() } }
+}
+
+/**
+ * How far (degrees) small controls should turn so they read upright in the hand. The screen is
+ * locked to portrait; this follows how the phone is actually held.
+ */
+val LocalIconRotation = compositionLocalOf { 0f }
+
+/** Turns [content] in place to match how the phone is held (see [LocalIconRotation]). */
+@Composable
+fun RotateWithDevice(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    val r = LocalIconRotation.current
+    Box(modifier.graphicsLayer { rotationZ = r }, contentAlignment = Alignment.Center) { content() }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -382,12 +397,14 @@ fun LensPills(lenses: List<Lens>, selectedKey: String?, onSelect: (Lens) -> Unit
                     .semantics { contentDescription = "$mm millimetre lens" },
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    if (selected) "${mm}mm" else mm,
-                    color = if (selected) HudAmber else Color.White,
-                    fontSize = if (selected) 11.sp else 12.sp,
-                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
-                )
+                RotateWithDevice {
+                    Text(
+                        if (selected) "${mm}mm" else mm,
+                        color = if (selected) HudAmber else Color.White,
+                        fontSize = if (selected) 11.sp else 12.sp,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                }
             }
         }
     }
@@ -491,13 +508,15 @@ fun GridOverlay(modifier: Modifier = Modifier) {
 @Composable
 fun CountdownOverlay(seconds: Int, modifier: Modifier = Modifier) {
     Box(modifier, contentAlignment = Alignment.Center) {
-        Text(
-            seconds.toString(),
-            color = HudAmber,
-            fontSize = 96.sp,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Light
-        )
+        RotateWithDevice {
+            Text(
+                seconds.toString(),
+                color = HudAmber,
+                fontSize = 96.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Light
+            )
+        }
     }
 }
 
