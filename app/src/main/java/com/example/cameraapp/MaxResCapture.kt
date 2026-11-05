@@ -55,6 +55,9 @@ data class MaxResRequest(
     val jpegQuality: Int = 95,
 )
 
+/** The full-resolution JPEG, and the EXIF rotation to record (YUV path only; JPEG is pre-rotated). */
+class MaxResResult(val jpeg: ByteArray, val exifRotationDegrees: Int)
+
 /**
  * Takes one full-resolution JPEG directly through Camera2. Call only after CameraX has
  * released the camera. It opens the camera with two outputs: a small normal-mode stream that
@@ -63,7 +66,7 @@ data class MaxResRequest(
  * again before returning the JPEG bytes.
  */
 @RequiresApi(31)
-suspend fun captureMaxResolution(context: Context, req: MaxResRequest): ByteArray = withContext(Dispatchers.IO) {
+suspend fun captureMaxResolution(context: Context, req: MaxResRequest): MaxResResult = withContext(Dispatchers.IO) {
     val manager = context.getSystemService(CameraManager::class.java)
     val chars = manager.getCameraCharacteristics(req.cameraId)
     val thread = HandlerThread("MaxResCapture").apply { start() }
@@ -71,7 +74,9 @@ suspend fun captureMaxResolution(context: Context, req: MaxResRequest): ByteArra
     val executor = Executor { handler.post(it) }
 
     val size = req.info.size
-    val jpegReader = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
+    val format = req.info.format
+    val jpegReader = ImageReader.newInstance(size.width, size.height, format, 2)
+    val orientation = jpegOrientation(req.info.sensorOrientation, req.displayRotationDegrees, req.frontFacing)
     val meterSize = meteringSize(chars)
     val meterReader = ImageReader.newInstance(meterSize.width, meterSize.height, ImageFormat.PRIVATE, 4)
     meterReader.setOnImageAvailableListener({ r -> r.acquireLatestImage()?.close() }, handler)
@@ -143,10 +148,14 @@ suspend fun captureMaxResolution(context: Context, req: MaxResRequest): ByteArra
         jpegReader.setOnImageAvailableListener({ r ->
             try {
                 r.acquireNextImage()?.use { image ->
-                    val buffer = image.planes[0].buffer
-                    val bytes = ByteArray(buffer.remaining())
-                    buffer.get(bytes)
-                    jpeg.complete(bytes)
+                    if (format == ImageFormat.JPEG) {
+                        val buffer = image.planes[0].buffer
+                        val bytes = ByteArray(buffer.remaining())
+                        buffer.get(bytes)
+                        jpeg.complete(bytes)
+                    } else {
+                        jpeg.complete(yuvToJpeg(image, req.jpegQuality))
+                    }
                 }
             } catch (e: Exception) {
                 jpeg.completeExceptionally(e)
@@ -156,8 +165,10 @@ suspend fun captureMaxResolution(context: Context, req: MaxResRequest): ByteArra
             addTarget(jpegReader.surface)
             apply3A()
             set(CaptureRequest.SENSOR_PIXEL_MODE, CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION)
-            set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation(req.info.sensorOrientation, req.displayRotationDegrees, req.frontFacing))
-            set(CaptureRequest.JPEG_QUALITY, req.jpegQuality.coerceIn(1, 100).toByte())
+            if (format == ImageFormat.JPEG) {
+                set(CaptureRequest.JPEG_ORIENTATION, orientation)
+                set(CaptureRequest.JPEG_QUALITY, req.jpegQuality.coerceIn(1, 100).toByte())
+            }
         }.build()
         session.stopRepeating()
         session.capture(still, object : CameraCaptureSession.CaptureCallback() {
@@ -165,7 +176,8 @@ suspend fun captureMaxResolution(context: Context, req: MaxResRequest): ByteArra
                 jpeg.completeExceptionally(IllegalStateException("Full-resolution capture failed (reason ${failure.reason})"))
             }
         }, handler)
-        withTimeout(10_000) { jpeg.await() }
+        val bytes = withTimeout(15_000) { jpeg.await() }
+        MaxResResult(bytes, if (format == ImageFormat.JPEG) 0 else orientation)
     } finally {
         try { session?.close() } catch (e: Exception) { Log.w(TAG, "Session close", e) }
         try { device?.close() } catch (e: Exception) { Log.w(TAG, "Device close", e) }
@@ -173,6 +185,44 @@ suspend fun captureMaxResolution(context: Context, req: MaxResRequest): ByteArra
         meterReader.close()
         thread.quitSafely()
     }
+}
+
+/** Encodes a YUV_420_888 image as JPEG (via NV21), honouring row and pixel strides. */
+private fun yuvToJpeg(image: android.media.Image, quality: Int): ByteArray {
+    val w = image.width
+    val h = image.height
+    val nv21 = ByteArray(w * h * 3 / 2)
+    val yPlane = image.planes[0]
+    val yBuf = yPlane.buffer
+    val yRow = yPlane.rowStride
+    var pos = 0
+    if (yRow == w) {
+        yBuf.position(0)
+        yBuf.get(nv21, 0, w * h)
+        pos = w * h
+    } else {
+        val row = ByteArray(yRow)
+        for (r in 0 until h) {
+            yBuf.position(r * yRow)
+            yBuf.get(row, 0, minOf(yRow, yBuf.remaining()))
+            System.arraycopy(row, 0, nv21, pos, w)
+            pos += w
+        }
+    }
+    val u = image.planes[1]
+    val v = image.planes[2]
+    val uBuf = u.buffer
+    val vBuf = v.buffer
+    for (r in 0 until h / 2) {
+        for (c in 0 until w / 2) {
+            nv21[pos++] = vBuf.get(r * v.rowStride + c * v.pixelStride)
+            nv21[pos++] = uBuf.get(r * u.rowStride + c * u.pixelStride)
+        }
+    }
+    val out = java.io.ByteArrayOutputStream()
+    android.graphics.YuvImage(nv21, ImageFormat.NV21, w, h, null)
+        .compressToJpeg(android.graphics.Rect(0, 0, w, h), quality.coerceIn(1, 100), out)
+    return out.toByteArray()
 }
 
 /** A small 4:3 size for the metering stream. */

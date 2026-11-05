@@ -161,12 +161,29 @@ fun saveJpegBytes(
     time: Long,
     telemetry: CameraTelemetry,
     recipe: FilmRecipe?,
+    /** EXIF rotation to record when the pixels aren't pre-rotated (0, 90, 180, 270). */
+    rotationDegrees: Int = 0,
 ): Uri? {
     val name = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.US).format(time) +
         (recipe?.let { "_" + fileSafe(it.label) } ?: "")
     val resolver = context.contentResolver
     val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, albumValues(name, MIME_JPEG)) ?: return null
     resolver.openOutputStream(uri)?.use { it.write(bytes) }
+    if (rotationDegrees != 0) {
+        resolver.openFileDescriptor(uri, "rw")?.use { pfd ->
+            val exif = ExifInterface(pfd.fileDescriptor)
+            exif.setAttribute(
+                ExifInterface.TAG_ORIENTATION,
+                when (rotationDegrees) {
+                    90 -> ExifInterface.ORIENTATION_ROTATE_90
+                    180 -> ExifInterface.ORIENTATION_ROTATE_180
+                    270 -> ExifInterface.ORIENTATION_ROTATE_270
+                    else -> ExifInterface.ORIENTATION_NORMAL
+                }.toString()
+            )
+            exif.saveAttributes()
+        }
+    }
     finishJpeg(context, uri, name, time, telemetry, recipe)
     return uri
 }

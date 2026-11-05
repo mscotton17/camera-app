@@ -450,7 +450,7 @@ fun CameraScreen() {
     // either changes and unbinds when this composable leaves.
     // JPEG resolution: the highest the lens offers unless one is chosen in the PRO panel.
     val jpegTarget: JpegSize? = lens?.jpegSizes?.let { sizes ->
-        sizes.firstOrNull { it.megapixels == mpChoice } ?: sizes.firstOrNull()
+        sizes.firstOrNull { it.mpTenths == mpChoice } ?: sizes.firstOrNull()
     }
     // CameraX can't stream the full-resolution size, so when that's chosen CameraX keeps its
     // largest normal size and the shutter takes the Camera2 single-shot path instead.
@@ -511,10 +511,10 @@ fun CameraScreen() {
             Log.e(TAG, "Binding ${lens.key} as $activeFormat failed", e)
             bound = null
             val sizes = lens.jpegSizes
-            val smaller = cameraXTarget?.let { t -> sizes.firstOrNull { !it.maxRes && it.megapixels < t.megapixels } }
+            val smaller = cameraXTarget?.let { t -> sizes.firstOrNull { !it.maxRes && it.mpTenths < t.mpTenths } }
             if (activeFormat == CaptureFormat.JPEG && cameraXTarget != null && smaller != null) {
-                Toast.makeText(context, "${cameraXTarget.megapixels} MP isn't available here; using ${smaller.megapixels} MP", Toast.LENGTH_SHORT).show()
-                mpChoice = smaller.megapixels
+                Toast.makeText(context, "${cameraXTarget.label} isn't available here; using ${smaller.label}", Toast.LENGTH_SHORT).show()
+                mpChoice = smaller.mpTenths
             } else if (activeFormat != CaptureFormat.JPEG) {
                 Toast.makeText(context, "${activeFormat.label} isn't available on this lens", Toast.LENGTH_SHORT).show()
                 format = CaptureFormat.JPEG
@@ -668,18 +668,17 @@ fun CameraScreen() {
             run {
                 val sizes = lens?.jpegSizes.orEmpty()
                 val actual = jpegResolution
-                val actualMp = actual?.let { ((it.width.toLong() * it.height + 500_000L) / 1_000_000L).toInt() }
                 val sensor = lens?.sensorMaxMp
                 ProControl(
                     label = "RESOLUTION",
                     value = when {
                         activeFormat != CaptureFormat.JPEG -> "STANDARD"
-                        jpegTarget?.maxRes == true -> "${jpegTarget.megapixels} MP"
-                        actualMp != null -> "$actualMp MP"
-                        else -> jpegTarget?.let { "${it.megapixels} MP" } ?: "--"
+                        jpegTarget?.maxRes == true -> jpegTarget.label
+                        actual != null -> mpLabel(actual.width, actual.height)
+                        else -> jpegTarget?.label ?: "--"
                     },
                     auto = mpChoice == null,
-                    options = sizes.map { "${it.megapixels} MP" },
+                    options = sizes.map { it.label },
                     selected = sizes.indexOf(jpegTarget),
                     note = when {
                         sizes.isEmpty() -> "This lens doesn't report its sizes"
@@ -691,11 +690,12 @@ fun CameraScreen() {
                             append("Shooting ${jpegTarget.width} \u00D7 ${jpegTarget.height} in full-resolution mode. ")
                             append("The viewfinder pauses for about a second while each shot is taken.")
                         } else if (actual != null) append("Shooting ${actual.width} \u00D7 ${actual.height}. ")
-                        if (sensor != null && sensor > (sizes.firstOrNull()?.megapixels ?: 0)) {
-                            append("The sensor is $sensor MP, but its full-resolution mode isn't open to other apps through CameraX.")
+                        if (sensor != null && lens?.maxRes == null && sensor * 10 > (sizes.firstOrNull()?.mpTenths ?: 0)) {
+                            append("The sensor is $sensor MP, but this phone doesn't offer its full-resolution mode to other apps. ")
+                            lens?.fullResReport?.let { append("[$it]") }
                         }
                     }.ifBlank { null },
-                    onSelect = { i -> mpChoice = sizes[i].megapixels }
+                    onSelect = { i -> mpChoice = sizes[i].mpTenths }
                 )
             },
             ProControl(
@@ -770,7 +770,8 @@ fun CameraScreen() {
                 if (countdown > 0) CountdownOverlay(countdown, Modifier.fillMaxSize())
                 if (draft == null) {
                     Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                        if (facingLenses.size > 1) {
+                        // Hidden while a panel is open, so they don't show through it.
+                        if (facingLenses.size > 1 && !proPanelOpen && !recipePickerOpen) {
                             LensPills(
                                 lenses = facingLenses,
                                 selectedKey = lens?.key,
@@ -865,7 +866,7 @@ fun CameraScreen() {
                             awbMode = awbMode,
                             jpegQuality = recipeSnapshot?.jpegQuality ?: 95,
                         )
-                        val megapixels = jpegTarget.megapixels
+                        val megapixels = jpegTarget.label
                         uiScope.launch {
                             maxResBusy = true
                             delay(50)
@@ -877,7 +878,7 @@ fun CameraScreen() {
                                 val main = ContextCompat.getMainExecutor(context)
                                 ioExecutor.execute {
                                     val saved = try {
-                                        saveJpegBytes(context, bytes, time, telemetrySnapshot, recipeSnapshot)
+                                        saveJpegBytes(context, bytes.jpeg, time, telemetrySnapshot, recipeSnapshot, bytes.exifRotationDegrees)
                                     } catch (e: Throwable) {
                                         Log.e(TAG, "Saving the full-resolution photo failed", e)
                                         null
@@ -885,7 +886,7 @@ fun CameraScreen() {
                                     main.execute {
                                         Toast.makeText(
                                             context,
-                                            if (saved != null) "$megapixels MP photo saved" else "Couldn't save the photo",
+                                            if (saved != null) "$megapixels photo saved" else "Couldn't save the photo",
                                             Toast.LENGTH_SHORT
                                         ).show()
                                         capturing = false
@@ -895,7 +896,7 @@ fun CameraScreen() {
                                 Log.e(TAG, "Full-resolution capture failed", e)
                                 Toast.makeText(
                                     context,
-                                    "$megapixels MP capture failed (${e.message}). Try a smaller resolution in PRO.",
+                                    "$megapixels capture failed (${e.message}). Try a smaller resolution in PRO.",
                                     Toast.LENGTH_LONG
                                 ).show()
                                 capturing = false
