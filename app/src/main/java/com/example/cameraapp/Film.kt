@@ -294,7 +294,7 @@ val FilmRecipes: List<FilmRecipe> = listOf(
         vignette = 0.15f, vignetteFeather = 0.75f, vignetteRoundness = 1.0f,
         grain = 0.025f, grainSize = 1.0f, grainColor = 0f, grainRoughness = 0.25f,
         grainShadows = 1.1f, grainMids = 1.0f, grainHighlights = 0.2f,
-        whiteBalance = WhiteBalance.AUTO, defaultEvOn = true, defaultEv = 1f / 3f,
+        whiteBalance = WhiteBalance.AUTO, defaultEvOn = true, defaultEv = 0f,
     ),
     // Pushed HP5: crisp contrast, punchy micro-texture, gentle sky separation through a
     // yellow-ish filter mix, fine organic grain; 3:2 frame.
