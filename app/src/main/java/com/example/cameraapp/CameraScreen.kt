@@ -853,6 +853,8 @@ fun CameraScreen() {
             ) {
                 if (settings.gridOn) GridOverlay(Modifier.fillMaxSize())
                 if (countdown > 0) CountdownOverlay(countdown, Modifier.fillMaxSize())
+                val developing = DevelopQueue.pending.intValue
+                if (developing > 0) DevelopingChip(developing, Modifier.align(Alignment.TopCenter).padding(top = 10.dp))
                 if (draft == null) {
                     Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                         // Hidden while a panel is open, so they don't show through it.
@@ -956,21 +958,18 @@ fun CameraScreen() {
                             maxResBusy = false
                             if (settings.hapticsOn) haptics.tick(opening = false)
                             result.onSuccess { bytes ->
+                                // Shot taken: free the shutter; saving and the recipe develop in the background.
+                                capturing = false
                                 val main = ContextCompat.getMainExecutor(context)
-                                ioExecutor.execute {
+                                DevelopQueue.submit {
                                     val saved = try {
                                         saveJpegBytes(context, bytes.jpeg, time, telemetrySnapshot, recipeSnapshot, bytes.exifRotationDegrees)
                                     } catch (e: Throwable) {
                                         Log.e(TAG, "Saving the full-resolution photo failed", e)
                                         null
                                     }
-                                    main.execute {
-                                        Toast.makeText(
-                                            context,
-                                            if (saved != null) "$megapixels photo saved" else "Couldn't save the photo",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                        capturing = false
+                                    if (saved == null) main.execute {
+                                        Toast.makeText(context, "Couldn't save the $megapixels photo", Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             }.onFailure { e ->
@@ -987,6 +986,7 @@ fun CameraScreen() {
                     }
                     val b = bound ?: return@capture
                     capturing = true
+                    val shotStart = System.currentTimeMillis()
                     // Feel: open click now, close tick after the exposure time; long exposures
                     // also sweep the ring for their duration before the processing spinner.
                     val exposureMs = ((resolvedExposure.shutterNs ?: telemetry.latest.exposureTimeNs ?: 0L) / 1_000_000L)
@@ -1013,7 +1013,12 @@ fun CameraScreen() {
                         telemetry = telemetry.latest,
                         recipe = renderRecipe,
                         ioExecutor = ioExecutor
-                    ) { capturing = false }
+                    ) {
+                        // The camera has the shot; for a long exposure, wait for it to finish.
+                        val left = exposureMs - (System.currentTimeMillis() - shotStart)
+                        if (left <= 0) capturing = false
+                        else uiScope.launch { delay(left); capturing = false }
+                    }
         }
         val shutterButton: @Composable (Modifier) -> Unit = { m ->
             ShutterButton(

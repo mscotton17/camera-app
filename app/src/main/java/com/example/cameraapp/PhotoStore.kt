@@ -23,8 +23,11 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import android.os.Handler
+import android.os.Looper
+import androidx.compose.runtime.mutableIntStateOf
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 
 private const val TAG = "PhotoStore"
@@ -44,9 +47,33 @@ private fun albumValues(displayName: String, mime: String) = ContentValues().app
 }
 
 /**
+ * Background darkroom: photos are saved straight away and their recipes are developed here one
+ * at a time, so the shutter is free again as soon as a shot is taken. [pending] is how many
+ * are still waiting or developing (for the on-screen indicator).
+ */
+object DevelopQueue {
+    val pending = mutableIntStateOf(0)
+    private val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "develop").apply { priority = Thread.NORM_PRIORITY - 1 } }
+    private val main = Handler(Looper.getMainLooper())
+
+    fun submit(work: () -> Unit) {
+        main.post { pending.intValue++ }
+        executor.execute {
+            try {
+                work()
+            } catch (e: Throwable) {
+                Log.e(TAG, "Developing a photo failed", e)
+            } finally {
+                main.post { pending.intValue = (pending.intValue - 1).coerceAtLeast(0) }
+            }
+        }
+    }
+}
+
+/**
  * Captures into MediaStore (Pictures/CameraApp) as JPEG, DNG, or both. [imageCapture] must have
- * been built with [format]'s output format. Recipe and EXIF work runs on [ioExecutor]; [onDone]
- * is always invoked on the main thread once the capture has finished or failed.
+ * been built with [format]'s output format; files are written on [ioExecutor]. [onReady] runs (on the main thread) as soon as the camera has the shot, so the
+ * next one can be taken; saving and the recipe carry on in the background via [DevelopQueue].
  */
 fun takePhoto(
     context: Context,
@@ -56,7 +83,7 @@ fun takePhoto(
     telemetry: CameraTelemetry,
     recipe: FilmRecipe?,
     ioExecutor: Executor,
-    onDone: () -> Unit
+    onReady: () -> Unit
 ) {
     val mainExecutor = ContextCompat.getMainExecutor(context)
     val time = System.currentTimeMillis()
@@ -75,33 +102,30 @@ fun takePhoto(
         return builder.build()
     }
 
-    val finished = AtomicBoolean(false)
-    val pending = AtomicInteger(if (format == CaptureFormat.RAW_JPEG) 2 else 1)
+    val ready = AtomicBoolean(false)
+    val failed = AtomicBoolean(false)
+    fun release() {
+        if (ready.compareAndSet(false, true)) mainExecutor.execute { onReady() }
+    }
 
     val callback = object : ImageCapture.OnImageSavedCallback {
+        // The sensor has the exposure: free the shutter for the next shot.
+        override fun onCaptureStarted() = release()
+
         override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+            release()
             val uri = output.savedUri
             if (uri != null && output.imageFormat != ImageFormat.RAW_SENSOR) {
-                finishJpeg(context, uri, name, time, telemetry, recipe)
-            }
-            if (pending.decrementAndGet() > 0 || !finished.compareAndSet(false, true)) return
-            val message = when (format) {
-                CaptureFormat.JPEG -> "Photo saved"
-                CaptureFormat.RAW -> "DNG saved"
-                CaptureFormat.RAW_JPEG -> "DNG + JPEG saved"
-            }
-            mainExecutor.execute {
-                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                onDone()
+                DevelopQueue.submit { finishJpeg(context, uri, name, time, telemetry, recipe) }
             }
         }
 
         override fun onError(exc: ImageCaptureException) {
             Log.e(TAG, "Photo capture failed", exc)
-            if (!finished.compareAndSet(false, true)) return
+            release()
+            if (!failed.compareAndSet(false, true)) return
             mainExecutor.execute {
                 Toast.makeText(context, "Capture failed: ${exc.message}", Toast.LENGTH_SHORT).show()
-                onDone()
             }
         }
     }
@@ -122,7 +146,7 @@ fun takePhoto(
     } catch (e: Exception) {
         Log.e(TAG, "takePicture rejected", e)
         Toast.makeText(context, "Capture failed: ${e.message}", Toast.LENGTH_SHORT).show()
-        onDone()
+        release()
     }
 }
 
