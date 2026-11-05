@@ -20,8 +20,11 @@ import kotlin.math.min
  * Where the 4:3 camera image sits on a screen of [size]. With a recipe [aspect] crop, the image
  * is enlarged until the cropped frame fills as much of the screen as it can (the parts that
  * get cropped away may run off-screen), so a crop never makes the picture smaller.
+ * With [area] (the band between the top icons and the recipe strip), the frame is centred
+ * vertically in that band instead of on the screen; if it's taller than the band it sits on
+ * the band's bottom edge so the recipes stay clear.
  */
-fun previewImageRect(size: Size, aspect: AspectRatio = AspectRatio.NATIVE): Rect {
+fun previewImageRect(size: Size, aspect: AspectRatio = AspectRatio.NATIVE, area: Rect? = null): Rect {
     val ratio = if (size.height > size.width) 3f / 4f else 4f / 3f
     var w = min(size.width, size.height * ratio)
     var h = w / ratio
@@ -34,7 +37,13 @@ fun previewImageRect(size: Size, aspect: AspectRatio = AspectRatio.NATIVE): Rect
         }
     }
     val left = (size.width - w) / 2f
-    val top = (size.height - h) / 2f
+    var top = (size.height - h) / 2f
+    if (area != null) {
+        val c = previewCropRect(Rect(0f, 0f, w, h), aspect)
+        val frameTop = if (c.height <= area.height) area.top + (area.height - c.height) / 2f
+        else (area.bottom - c.height).coerceAtLeast(0f)
+        top = frameTop - c.top
+    }
     return Rect(left, top, left + w, top + h)
 }
 
@@ -54,10 +63,12 @@ fun FilmFrameOverlay(
     modifier: Modifier = Modifier,
     /** How the phone is held (0/90/180/270, clockwise): the print's border and stamp follow it. */
     deviceOrientation: Int = 0,
+    /** Band the frame is centred in (see [previewImageRect]). */
+    area: Rect? = null,
 ) {
     if (recipe.aspect == AspectRatio.NATIVE && recipe.border == BorderStyle.NONE && !recipe.dateStamp) return
     Canvas(modifier) {
-        val image = previewImageRect(size, recipe.aspect)
+        val image = previewImageRect(size, recipe.aspect, area)
         val crop = previewCropRect(image, recipe.aspect)
         val mask = Color.Black.copy(alpha = 0.9f)
         // Aspect crop: darken the parts of the frame that won't be saved.

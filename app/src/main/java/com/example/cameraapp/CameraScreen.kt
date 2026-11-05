@@ -36,6 +36,7 @@ import android.view.OrientationEventListener
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.statusBars
 import kotlinx.coroutines.Job
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.ui.platform.LocalDensity
@@ -567,14 +568,26 @@ fun CameraScreen() {
     }
 
     CompositionLocalProvider(LocalIconRotation provides iconRotation) {
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        // Portrait: the band between the top icons and the recipe strip, where the viewfinder
+        // frame is centred so the recipes sit below it rather than over the picture.
+        val vfArea = run {
+            val d = LocalDensity.current
+            if (LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE) return@run null
+            val top = WindowInsets.statusBars.getTop(d) + with(d) { (4.dp + 48.dp + 4.dp).toPx() }
+            val bottom = constraints.maxHeight - WindowInsets.navigationBars.getBottom(d) -
+                with(d) { (ShutterRowBottomPadding + 80.dp + 40.dp + 4.dp).toPx() }
+            if (bottom - top < 100f) null
+            else androidx.compose.ui.geometry.Rect(0f, top, constraints.maxWidth.toFloat(), bottom)
+        }
         // The preview is sized to the (possibly enlarged) 4:3 image, so with a crop the cropped
         // frame fills the screen and the cropped-away parts run off the edges.
         BoxWithConstraints(Modifier.fillMaxSize()) {
         val previewDensity = LocalDensity.current
         val image = previewImageRect(
             androidx.compose.ui.geometry.Size(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat()),
-            recipe?.aspect ?: AspectRatio.NATIVE
+            recipe?.aspect ?: AspectRatio.NATIVE,
+            vfArea
         )
         AndroidView(
             factory = { previewView },
@@ -600,19 +613,19 @@ fun CameraScreen() {
         }
 
         // Aspect crop, border and date stamp as they'll appear on the photo.
-        recipe?.let { FilmFrameOverlay(it, Modifier.fillMaxSize(), deviceOrientation) }
+        recipe?.let { FilmFrameOverlay(it, Modifier.fillMaxSize(), deviceOrientation, vfArea) }
 
         // Gesture layer over the preview: tap to focus/meter.
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(bound, recipe?.aspect) {
+                .pointerInput(bound, recipe?.aspect, vfArea) {
                     detectTapGestures { offset ->
                         val cam = bound?.camera ?: return@detectTapGestures
                         // Ignore taps on the black bars and on the recipe's crop matte.
                         val viewSize = androidx.compose.ui.geometry.Size(size.width.toFloat(), size.height.toFloat())
                         val aspect = recipe?.aspect ?: AspectRatio.NATIVE
-                        val image = previewImageRect(viewSize, aspect)
+                        val image = previewImageRect(viewSize, aspect, vfArea)
                         if (!previewCropRect(image, aspect).contains(offset)) return@detectTapGestures
                         // The preview view starts at the image's corner, which may be off-screen.
                         val point = previewView.meteringPointFactory.createPoint(offset.x - image.left, offset.y - image.top)
@@ -807,7 +820,7 @@ fun CameraScreen() {
         // Controls anchored to the image itself: grid, countdown, lens buttons, PRO strip.
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val density = LocalDensity.current
-            val full = previewImageRect(androidx.compose.ui.geometry.Size(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat()), recipe?.aspect ?: AspectRatio.NATIVE)
+            val full = previewImageRect(androidx.compose.ui.geometry.Size(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat()), recipe?.aspect ?: AspectRatio.NATIVE, vfArea)
             val frame = previewCropRect(full, recipe?.aspect ?: AspectRatio.NATIVE)
             Box(
                 Modifier
@@ -859,7 +872,7 @@ fun CameraScreen() {
             // (centred in it), only overlapping the image on phones with no room below it.
             if (draft == null && !recipePickerOpen && !proPanelOpen) BoxWithConstraints(Modifier.fillMaxSize()) {
                 val density = LocalDensity.current
-                val full = previewImageRect(androidx.compose.ui.geometry.Size(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat()), recipe?.aspect ?: AspectRatio.NATIVE)
+                val full = previewImageRect(androidx.compose.ui.geometry.Size(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat()), recipe?.aspect ?: AspectRatio.NATIVE, vfArea)
                 val navPx = WindowInsets.navigationBars.getBottom(density)
                 val shutterTop = constraints.maxHeight - navPx - with(density) { (ShutterRowBottomPadding + 80.dp).toPx() }
                 val toggleHeight = with(density) { 40.dp.toPx() }
