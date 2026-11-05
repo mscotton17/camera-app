@@ -80,7 +80,8 @@ class AppSettings(context: Context) {
 
 /**
  * Minimal icon bar: flash (tap to cycle), RAW badge (tap to cycle format), a timer indicator
- * when the self-timer is on, and the ☰ menu.
+ * when the self-timer is on, and the ☰ menu. [vertical] lays them down an edge (landscape),
+ * with [reversed] flipping the order so they stay where they physically are in portrait.
  */
 @Composable
 fun TopIconBar(
@@ -95,13 +96,12 @@ fun TopIconBar(
     menuOpen: Boolean,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
+    vertical: Boolean = false,
+    reversed: Boolean = false,
 ) {
-    Row(
-        modifier = modifier,
-        horizontalArrangement = if (compact) Arrangement.SpaceEvenly else Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        val slot = if (compact) 40.dp else 48.dp
+    val slot = if (compact) 40.dp else 48.dp
+    val items = mutableListOf<@Composable () -> Unit>()
+    items += {
         IconSlot("Flash ${flash.label.lowercase()}", slot, enabled = flashAvailable, onClick = onFlash) {
             val tint = when {
                 !flashAvailable || flash == FlashSetting.OFF -> Dim
@@ -114,29 +114,31 @@ fun TopIconBar(
                 }
             }
         }
-        if (formatAvailable) {
-            IconSlot("Format ${format.label}", slot, onClick = onFormat) {
-                val raw = format != CaptureFormat.JPEG
-                Box(
-                    Modifier
-                        .border(1.5.dp, if (raw) HudAmber else Dim, RoundedCornerShape(5.dp))
-                        .padding(horizontal = 5.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        if (raw) "RAW" else "JPG",
-                        color = if (raw) HudAmber else Dim,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
+    }
+    if (formatAvailable) items += {
+        IconSlot("Format ${format.label}", slot, onClick = onFormat) {
+            val raw = format != CaptureFormat.JPEG
+            Box(
+                Modifier
+                    .border(1.5.dp, if (raw) HudAmber else Dim, RoundedCornerShape(5.dp))
+                    .padding(horizontal = 5.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    if (raw) "RAW" else "JPG",
+                    color = if (raw) HudAmber else Dim,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
+                )
             }
         }
-        if (timerSeconds > 0) {
-            IconSlot("Self-timer ${timerSeconds} seconds", slot, onClick = onMenu) {
-                Text("⏲ ${timerSeconds}s", color = HudAmber, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
-            }
+    }
+    if (timerSeconds > 0) items += {
+        IconSlot("Self-timer ${timerSeconds} seconds", slot, onClick = onMenu) {
+            Text("\u23F2 ${timerSeconds}s", color = HudAmber, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
         }
+    }
+    items += {
         IconSlot("Menu", slot, onClick = onMenu) {
             Canvas(Modifier.size(22.dp)) {
                 val c = if (menuOpen) HudAmber else Color.White
@@ -147,6 +149,20 @@ fun TopIconBar(
                 }
             }
         }
+    }
+    val ordered = if (reversed) items.reversed() else items
+    if (vertical) {
+        Column(
+            modifier = modifier,
+            verticalArrangement = Arrangement.SpaceBetween,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) { ordered.forEach { it() } }
+    } else {
+        Row(
+            modifier = modifier,
+            horizontalArrangement = if (compact) Arrangement.SpaceEvenly else Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) { ordered.forEach { it() } }
     }
 }
 

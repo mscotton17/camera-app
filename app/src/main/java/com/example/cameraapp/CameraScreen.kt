@@ -793,29 +793,27 @@ fun CameraScreen() {
         }
 
         if (isLandscape) {
-            // Landscape: icons, mode and (in PRO) the exposure column, centred in the left black
-            // bar and sized to it so nothing spills onto the image.
-            BoxWithConstraints(Modifier.fillMaxSize()) {
-                val density = LocalDensity.current
-                val full = previewImageRect(androidx.compose.ui.geometry.Size(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat()))
-                val barWidth = with(density) { full.left.toDp() }
-                Box(
-                    Modifier
-                        .align(Alignment.CenterStart)
-                        .width(barWidth)
-                        .fillMaxHeight()
-                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start + WindowInsetsSides.Vertical))
-                        .padding(horizontal = 4.dp, vertical = 8.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.align(Alignment.Center).fillMaxWidth().verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        topBar(Modifier.fillMaxWidth(), true)
-                    }
-                }
-            }
+            // Landscape: the icons stay on the edge of the phone they're on in portrait, in the
+            // same order, each turned upright. Phone turned left: that edge is the left side,
+            // with the menu at the top and the flash at the bottom.
+            TopIconBar(
+                flash = flash,
+                flashAvailable = flashAvailable,
+                onFlash = { flash = flash.next() },
+                format = activeFormat,
+                formatAvailable = formatAvailable,
+                onFormat = cycleFormat,
+                timerSeconds = timerSec,
+                onMenu = { menuOpen = !menuOpen },
+                menuOpen = menuOpen,
+                vertical = true,
+                reversed = displayRotation != Surface.ROTATION_270,
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxHeight()
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start + WindowInsetsSides.Vertical))
+                    .padding(start = 4.dp, top = 20.dp, bottom = 20.dp)
+            )
         } else {
             // Portrait: PHOTO · PRO sits in the black band between the image and the shutter row
             // (centred in it), only overlapping the image on phones with no room below it.
