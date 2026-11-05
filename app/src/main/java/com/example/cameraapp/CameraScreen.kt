@@ -787,8 +787,6 @@ fun CameraScreen() {
             ) {
                 if (settings.gridOn) GridOverlay(Modifier.fillMaxSize())
                 if (countdown > 0) CountdownOverlay(countdown, Modifier.fillMaxSize())
-                val developing = DevelopQueue.pending.intValue
-                if (developing > 0) DevelopingChip(developing, Modifier.align(Alignment.TopCenter).padding(top = 10.dp))
                 if (draft == null) {
                     Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                         // Hidden while a panel is open, so they don't show through it.
@@ -901,7 +899,8 @@ fun CameraScreen() {
             ShutterButton(
                 // Stays tappable during a self-timer countdown, to cancel it.
                 enabled = (!capturing && bound != null) || countdown > 0,
-                busy = capturing,
+                // Spins while a shot is being taken or any photo is still developing.
+                busy = capturing || DevelopQueue.pending.intValue > 0,
                 exposureProgress = when {
                     countdown > 0 -> countdownSweep.value
                     exposureRunning -> exposureSweep.value

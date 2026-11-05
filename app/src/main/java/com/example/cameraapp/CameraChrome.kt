@@ -732,26 +732,3 @@ private fun Arrow(symbol: String, target: FilmRecipe?, onSelect: (String) -> Uni
         if (target != null) Text(symbol, color = Color.White.copy(alpha = 0.7f), fontSize = 22.sp)
     }
 }
-
-/** Small "DEVELOPING" tag while photos are still getting their recipe in the background. */
-@Composable
-fun DevelopingChip(count: Int, modifier: Modifier = Modifier) {
-    Box(
-        modifier
-            .clip(RoundedCornerShape(50))
-            .background(Color.Black.copy(alpha = 0.55f))
-            .padding(horizontal = 10.dp, vertical = 4.dp)
-            .semantics { contentDescription = "Developing $count photo" + if (count == 1) "" else "s" }
-    ) {
-        RotateWithDevice {
-            Text(
-                if (count > 1) "DEVELOPING \u00B7 $count" else "DEVELOPING",
-                color = HudAmber,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 1.sp
-            )
-        }
-    }
-}
