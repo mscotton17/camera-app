@@ -57,7 +57,18 @@ data class ExposureCaps(
     val apertures: List<Float>,
     /** White-balance modes the camera accepts (Camera2 CONTROL_AWB_MODE_*). */
     val awbModes: Set<Int> = emptySet(),
+    /** Tone-curve modes the camera accepts (Camera2 TONEMAP_MODE_*). */
+    val toneModes: Set<Int> = emptySet(),
+    /** Sensor area metering regions are given in, and how many AE regions it takes. */
+    val activeArray: android.graphics.Rect? = null,
+    val maxAeRegions: Int = 0,
 ) {
+    /** The camera can be given a fixed tone curve instead of its scene-adaptive one. */
+    val fixedToneCurve: Boolean
+        get() = CameraCharacteristics.TONEMAP_MODE_PRESET_CURVE in toneModes ||
+            CameraCharacteristics.TONEMAP_MODE_CONTRAST_CURVE in toneModes ||
+            CameraCharacteristics.TONEMAP_MODE_GAMMA_VALUE in toneModes
+
     val variableAperture: Boolean get() = apertures.size > 1
 }
 
@@ -73,6 +84,9 @@ private fun exposureCaps(lensChars: CameraCharacteristics, cameraChars: CameraCh
         apertures = lensChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
             ?.toList()?.distinct()?.sorted().orEmpty(),
         awbModes = cameraChars.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)?.toSet().orEmpty(),
+        toneModes = cameraChars.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)?.toSet().orEmpty(),
+        activeArray = cameraChars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE),
+        maxAeRegions = cameraChars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0,
     )
 
 data class LensSet(val lenses: List<Lens>, private val defaults: Map<Int, String>) {

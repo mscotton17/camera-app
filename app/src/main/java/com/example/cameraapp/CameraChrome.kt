@@ -82,6 +82,24 @@ class AppSettings(context: Context) {
         gridOn = on
         prefs.edit().putBoolean("grid", on).apply()
     }
+
+    /** Fixed (camera-like) tone curve instead of the phone's scene-adaptive one. On by default. */
+    var naturalTone by mutableStateOf(prefs.getBoolean("naturalTone", true))
+        private set
+    var metering by mutableStateOf(
+        MeteringMode.entries.firstOrNull { it.name == prefs.getString("metering", null) } ?: MeteringMode.CENTER
+    )
+        private set
+
+    fun updateNaturalTone(on: Boolean) {
+        naturalTone = on
+        prefs.edit().putBoolean("naturalTone", on).apply()
+    }
+
+    fun updateMetering(mode: MeteringMode) {
+        metering = mode
+        prefs.edit().putString("metering", mode.name).apply()
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -290,6 +308,15 @@ fun MenuSheet(
         } else {
             Segmented("SHUTTER HAPTICS", listOf("OFF", "ON"), if (settings.hapticsOn) 1 else 0) { settings.updateHaptics(it == 1) }
             Segmented("GRID LINES", listOf("OFF", "THIRDS"), if (settings.gridOn) 1 else 0) { settings.updateGrid(it == 1) }
+            Segmented(
+                "METERING", MeteringMode.entries.map { it.label }, MeteringMode.entries.indexOf(settings.metering),
+                note = settings.metering.description
+            ) { settings.updateMetering(MeteringMode.entries[it]) }
+            Segmented(
+                "TONE", listOf("PHONE", "NATURAL"), if (settings.naturalTone) 1 else 0,
+                note = if (settings.naturalTone) "Fixed tone curve like a dedicated camera: shadows and highlights stay where the light put them"
+                else "The phone's adaptive curve, which evens out every scene"
+            ) { settings.updateNaturalTone(it == 1) }
         }
     }
 }

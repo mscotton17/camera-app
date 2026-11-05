@@ -403,8 +403,21 @@ fun CameraScreen() {
     // white balance if the camera offers it.
     val resolvedExposure = lens?.let { exposure.resolvedFor(it.exposure) } ?: ExposureSettings()
     val awbMode = recipe?.whiteBalance?.awbMode?.takeIf { lens?.exposure?.awbModes?.contains(it) == true }
-    LaunchedEffect(bound, resolvedExposure, awbMode) {
-        bound?.camera?.let { applyExposure(it, resolvedExposure, awbMode) }
+    // Spot metering point: in sensor coordinates for the camera, and within the crop for our own
+    // priority metering. Cleared when the lens changes or metering leaves SPOT.
+    var spotSensor by remember { mutableStateOf<android.graphics.PointF?>(null) }
+    var spotView by remember { mutableStateOf<android.graphics.PointF?>(null) }
+    LaunchedEffect(lens?.key, settings.metering) { spotSensor = null; spotView = null }
+    LaunchedEffect(bound, resolvedExposure, awbMode, settings.naturalTone, settings.metering, spotSensor) {
+        bound?.camera?.let {
+            applyExposure(
+                it, resolvedExposure, awbMode,
+                caps = lens?.exposure,
+                fixedTone = settings.naturalTone,
+                metering = settings.metering,
+                spot = spotSensor,
+            )
+        }
     }
     // DR200 / DR400 underexpose the sensor by 1 / 2 stops (camera exposure compensation in
     // auto, the metering target in shutter/ISO priority); the tone curve lifts it back by
@@ -465,7 +478,9 @@ fun CameraScreen() {
             val frameMs = (exposure.shutterNs ?: 0L) / 1_000_000L
             delay(max(250L, frameMs * 3))
             if (capturing) continue
-            val luma = previewView.bitmap?.let { meanLuma(it, recipe?.aspect ?: AspectRatio.NATIVE) } ?: continue
+            val luma = previewView.bitmap?.let {
+                meanLuma(it, recipe?.aspect ?: AspectRatio.NATIVE, settings.metering, spotView)
+            } ?: continue
             val next = exposure.resolvedFor(caps).meteredStep(luma, caps, meteringEv)
             if (next != exposure) exposure = next
         }
@@ -596,12 +611,23 @@ fun CameraScreen() {
                         val viewSize = androidx.compose.ui.geometry.Size(size.width.toFloat(), size.height.toFloat())
                         val aspect = recipe?.aspect ?: AspectRatio.NATIVE
                         val image = previewImageRect(viewSize, aspect, vfArea)
-                        if (!previewCropRect(image, aspect).contains(offset)) return@detectTapGestures
+                        val crop = previewCropRect(image, aspect)
+                        if (!crop.contains(offset)) return@detectTapGestures
                         // The preview view starts at the image's corner, which may be off-screen.
                         val point = previewView.meteringPointFactory.createPoint(offset.x - image.left, offset.y - image.top)
+                        // Matrix: tap focuses and meters there. Centre-weighted: tap only focuses.
+                        // Spot: tap focuses and moves the spot.
+                        val metering = settings.metering
+                        if (metering == MeteringMode.SPOT) {
+                            spotSensor = android.graphics.PointF(point.x, point.y)
+                            spotView = android.graphics.PointF(
+                                (offset.x - crop.left) / crop.width, (offset.y - crop.top) / crop.height
+                            )
+                        }
                         val action = FocusMeteringAction.Builder(
                             point,
-                            FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE
+                            if (metering == MeteringMode.MATRIX) FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE
+                            else FocusMeteringAction.FLAG_AF
                         ).setAutoCancelDuration(3, TimeUnit.SECONDS).build()
                         cam.cameraControl.startFocusAndMetering(action)
                         focusPoint = offset
@@ -682,6 +708,16 @@ fun CameraScreen() {
         // PRO panel: ISO, shutter, EV and aperture, each with its choices.
         val apertures = caps?.apertures.orEmpty()
         val proControls = listOf(
+            ProControl(
+                label = "METERING",
+                value = settings.metering.label,
+                auto = false,
+                options = MeteringMode.entries.map { it.label },
+                selected = MeteringMode.entries.indexOf(settings.metering),
+                info = settings.metering.description +
+                    if (settings.metering == MeteringMode.SPOT) ". Tap the viewfinder to move the spot." else "",
+                onSelect = { settings.updateMetering(MeteringMode.entries[it]) }
+            ),
             ProControl(
                 label = "ISO",
                 value = (resolvedExposure.iso ?: hud.iso)?.let { "ISO $it" } ?: "ISO --",

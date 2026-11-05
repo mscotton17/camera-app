@@ -6,6 +6,10 @@ import android.hardware.camera2.CaptureRequest
 import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.core.Camera
+import android.graphics.PointF
+import android.hardware.camera2.CameraMetadata
+import android.hardware.camera2.params.MeteringRectangle
+import android.hardware.camera2.params.TonemapCurve
 import kotlin.math.abs
 import kotlin.math.log2
 import kotlin.math.max
@@ -164,9 +168,42 @@ data class ExposureSettings(
     }
 }
 
-/** Sends [settings] to the camera; they apply to the preview and to every still capture. */
+/** How auto-exposure (and shutter / ISO priority) judges brightness. */
+enum class MeteringMode(val label: String, val description: String) {
+    MATRIX("MATRIX", "The phone's own metering across the whole frame"),
+    CENTER("CENTER", "Centre-weighted, like a classic film camera"),
+    SPOT("SPOT", "A small spot in the middle, or wherever you tap"),
+}
+
+/** Spot size as a fraction of the frame's short side. */
+private const val SPOT_SIZE = 0.08f
+
+/** sRGB transfer curve as (in, out) pairs, for cameras that only take a contrast curve. */
+private val SrgbCurve: FloatArray by lazy {
+    val n = 64
+    FloatArray(n * 2) { i ->
+        val x = (i / 2) / (n - 1f)
+        if (i % 2 == 0) x
+        else if (x <= 0.0031308f) 12.92f * x else (1.055f * x.toDouble().pow(1.0 / 2.4) - 0.055).toFloat()
+    }
+}
+
+/**
+ * Sends [settings] to the camera; they apply to the preview and to every still capture.
+ * [fixedTone] swaps the phone's scene-adaptive tone curve (which lifts shadows and pulls down
+ * highlights on every scene) for a fixed sRGB curve, like a dedicated camera. [metering] sets
+ * where auto-exposure measures; [spot] is the spot's centre in normalised sensor coordinates.
+ */
 @SuppressLint("UnsafeOptInUsageError") // Camera2CameraControl is @ExperimentalCamera2Interop
-fun applyExposure(camera: Camera, settings: ExposureSettings, awbMode: Int? = null) {
+fun applyExposure(
+    camera: Camera,
+    settings: ExposureSettings,
+    awbMode: Int? = null,
+    caps: ExposureCaps? = null,
+    fixedTone: Boolean = false,
+    metering: MeteringMode = MeteringMode.MATRIX,
+    spot: PointF? = null,
+) {
     val control = Camera2CameraControl.from(camera.cameraControl)
     val shutter = settings.shutterNs
     val iso = settings.iso
@@ -191,6 +228,48 @@ fun applyExposure(camera: Camera, settings: ExposureSettings, awbMode: Int? = nu
         builder.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, awbMode)
         any = true
     }
+    if (fixedTone && caps != null) {
+        val modes = caps.toneModes
+        when {
+            CameraMetadata.TONEMAP_MODE_PRESET_CURVE in modes -> {
+                builder.setCaptureRequestOption(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_PRESET_CURVE)
+                    .setCaptureRequestOption(CaptureRequest.TONEMAP_PRESET_CURVE, CaptureRequest.TONEMAP_PRESET_CURVE_SRGB)
+                any = true
+            }
+            CameraMetadata.TONEMAP_MODE_CONTRAST_CURVE in modes -> {
+                builder.setCaptureRequestOption(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
+                    .setCaptureRequestOption(CaptureRequest.TONEMAP_CURVE, TonemapCurve(SrgbCurve, SrgbCurve, SrgbCurve))
+                any = true
+            }
+            CameraMetadata.TONEMAP_MODE_GAMMA_VALUE in modes -> {
+                builder.setCaptureRequestOption(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_GAMMA_VALUE)
+                    .setCaptureRequestOption(CaptureRequest.TONEMAP_GAMMA, 2.2f)
+                any = true
+            }
+        }
+    }
+    val area = caps?.activeArray
+    val autoExposure = shutter == null || iso == null
+    if (autoExposure && area != null && (caps?.maxAeRegions ?: 0) > 0 && metering != MeteringMode.MATRIX) {
+        val w = area.width()
+        val h = area.height()
+        val rect = when (metering) {
+            MeteringMode.CENTER -> {
+                // The middle 60% of the frame, the way centre-weighted metering favours it.
+                MeteringRectangle(area.left + (w * 0.2f).toInt(), area.top + (h * 0.2f).toInt(), (w * 0.6f).toInt(), (h * 0.6f).toInt(), MeteringRectangle.METERING_WEIGHT_MAX)
+            }
+            else -> {
+                val side = (min(w, h) * SPOT_SIZE).toInt().coerceAtLeast(16)
+                val cx = area.left + ((spot?.x ?: 0.5f).coerceIn(0f, 1f) * w).toInt()
+                val cy = area.top + ((spot?.y ?: 0.5f).coerceIn(0f, 1f) * h).toInt()
+                val x = (cx - side / 2).coerceIn(area.left, area.right - side)
+                val y = (cy - side / 2).coerceIn(area.top, area.bottom - side)
+                MeteringRectangle(x, y, side, side, MeteringRectangle.METERING_WEIGHT_MAX)
+            }
+        }
+        builder.setCaptureRequestOption(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(rect))
+        any = true
+    }
     if (any) control.setCaptureRequestOptions(builder.build()) else control.clearCaptureRequestOptions()
 }
 
@@ -198,7 +277,13 @@ fun applyExposure(camera: Camera, settings: ExposureSettings, awbMode: Int? = nu
  * Mean brightness (0..1) of the camera image within a FIT_CENTER [preview] bitmap, measured
  * only inside the recipe's [aspect] crop so priority metering ignores what won't be saved.
  */
-fun meanLuma(preview: Bitmap, aspect: AspectRatio = AspectRatio.NATIVE): Float? {
+fun meanLuma(
+    preview: Bitmap,
+    aspect: AspectRatio = AspectRatio.NATIVE,
+    metering: MeteringMode = MeteringMode.MATRIX,
+    /** Spot centre within the crop, 0..1 each way. */
+    spot: PointF? = null,
+): Float? {
     val w = preview.width
     val h = preview.height
     if (w == 0 || h == 0) return null
@@ -215,8 +300,35 @@ fun meanLuma(preview: Bitmap, aspect: AspectRatio = AspectRatio.NATIVE): Float? 
     val pixels = IntArray(small.width * small.height)
     small.getPixels(pixels, 0, small.width, 0, 0, small.width, small.height)
     var sum = 0.0
-    for (c in pixels) {
-        sum += 0.2126 * ((c shr 16) and 0xFF) + 0.7152 * ((c shr 8) and 0xFF) + 0.0722 * (c and 0xFF)
+    var weights = 0.0
+    val sw = small.width
+    val sh = small.height
+    val spotX = (spot?.x ?: 0.5f).coerceIn(0f, 1f)
+    val spotY = (spot?.y ?: 0.5f).coerceIn(0f, 1f)
+    // Spot radius in the scaled image, at least one sample's worth.
+    val spotR = max(SPOT_SIZE / 2f * min(sw, sh) / sh, 1.5f / sh)
+    for (i in pixels.indices) {
+        val c = pixels[i]
+        val nx = ((i % sw) + 0.5f) / sw
+        val ny = ((i / sw) + 0.5f) / sh
+        val weight = when (metering) {
+            MeteringMode.MATRIX -> 1.0
+            // Gaussian falloff from the centre: the middle counts most, edges still a little.
+            MeteringMode.CENTER -> {
+                val dx = (nx - 0.5f) / 0.3f
+                val dy = (ny - 0.5f) / 0.3f
+                kotlin.math.exp(-0.5 * (dx * dx + dy * dy))
+            }
+            MeteringMode.SPOT -> {
+                val dx = (nx - spotX) * sw / sh
+                val dy = ny - spotY
+                if (dx * dx + dy * dy <= spotR * spotR) 1.0 else 0.0
+            }
+        }
+        if (weight == 0.0) continue
+        sum += weight * (0.2126 * ((c shr 16) and 0xFF) + 0.7152 * ((c shr 8) and 0xFF) + 0.0722 * (c and 0xFF))
+        weights += weight
     }
-    return (sum / pixels.size / 255.0).toFloat()
+    if (weights == 0.0) return null
+    return (sum / weights / 255.0).toFloat()
 }
