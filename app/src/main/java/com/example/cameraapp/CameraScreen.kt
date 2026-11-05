@@ -149,6 +149,8 @@ fun CameraScreen() {
     var exposure by remember { mutableStateOf(ExposureSettings()) }
     // Chosen JPEG megapixels (null = the highest the lens offers) and what CameraX actually bound.
     var mpChoice by rememberSaveable { mutableStateOf<Int?>(null) }
+    // True while a full-resolution shot has the camera through Camera2 (CameraX is unbound).
+    var maxResBusy by remember { mutableStateOf(false) }
     var jpegResolution by remember { mutableStateOf<android.util.Size?>(null) }
     // Exposure compensation in EV; also resets to 0 on launch.
     var evComp by remember { mutableFloatStateOf(0f) }
@@ -450,9 +452,13 @@ fun CameraScreen() {
     val jpegTarget: JpegSize? = lens?.jpegSizes?.let { sizes ->
         sizes.firstOrNull { it.megapixels == mpChoice } ?: sizes.firstOrNull()
     }
-    DisposableEffect(lifecycleOwner, provider, lens?.key, activeFormat, jpegTarget) {
+    // CameraX can't stream the full-resolution size, so when that's chosen CameraX keeps its
+    // largest normal size and the shutter takes the Camera2 single-shot path instead.
+    val cameraXTarget: JpegSize? =
+        if (jpegTarget?.maxRes == true) lens?.jpegSizes?.firstOrNull { !it.maxRes } else jpegTarget
+    DisposableEffect(lifecycleOwner, provider, lens?.key, activeFormat, cameraXTarget, maxResBusy) {
         val p = provider
-        if (p == null || lens == null) return@DisposableEffect onDispose { }
+        if (p == null || lens == null || maxResBusy) return@DisposableEffect onDispose { }
 
         val previewBuilder = Preview.Builder()
             .setResolutionSelector(FourByThree)
@@ -464,18 +470,18 @@ fun CameraScreen() {
         // RAW is always full sensor resolution; only constrain JPEG-only capture.
         if (activeFormat == CaptureFormat.JPEG) {
             captureBuilder.setResolutionSelector(
-                if (jpegTarget == null) {
+                if (cameraXTarget == null) {
                     FourByThree
                 } else {
                     ResolutionSelector.Builder()
                         .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
                         .setResolutionStrategy(
-                            ResolutionStrategy(jpegTarget.size, ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER)
+                            ResolutionStrategy(cameraXTarget.size, ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER)
                         )
                         // The largest sizes are "high resolution" ones that can't stream at full
                         // frame rate; CameraX only offers them when asked to prefer resolution.
                         .setAllowedResolutionMode(
-                            if (jpegTarget.highRes) ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE
+                            if (cameraXTarget.highRes) ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE
                             else ResolutionSelector.PREFER_CAPTURE_RATE_OVER_HIGHER_RESOLUTION
                         )
                         .build()
@@ -505,9 +511,9 @@ fun CameraScreen() {
             Log.e(TAG, "Binding ${lens.key} as $activeFormat failed", e)
             bound = null
             val sizes = lens.jpegSizes
-            val smaller = jpegTarget?.let { t -> sizes.firstOrNull { it.megapixels < t.megapixels } }
-            if (activeFormat == CaptureFormat.JPEG && jpegTarget != null && smaller != null) {
-                Toast.makeText(context, "${jpegTarget.megapixels} MP isn't available here; using ${smaller.megapixels} MP", Toast.LENGTH_SHORT).show()
+            val smaller = cameraXTarget?.let { t -> sizes.firstOrNull { !it.maxRes && it.megapixels < t.megapixels } }
+            if (activeFormat == CaptureFormat.JPEG && cameraXTarget != null && smaller != null) {
+                Toast.makeText(context, "${cameraXTarget.megapixels} MP isn't available here; using ${smaller.megapixels} MP", Toast.LENGTH_SHORT).show()
                 mpChoice = smaller.megapixels
             } else if (activeFormat != CaptureFormat.JPEG) {
                 Toast.makeText(context, "${activeFormat.label} isn't available on this lens", Toast.LENGTH_SHORT).show()
@@ -668,6 +674,7 @@ fun CameraScreen() {
                     label = "RESOLUTION",
                     value = when {
                         activeFormat != CaptureFormat.JPEG -> "STANDARD"
+                        jpegTarget?.maxRes == true -> "${jpegTarget.megapixels} MP"
                         actualMp != null -> "$actualMp MP"
                         else -> jpegTarget?.let { "${it.megapixels} MP" } ?: "--"
                     },
@@ -680,7 +687,10 @@ fun CameraScreen() {
                         else -> null
                     },
                     info = buildString {
-                        if (actual != null) append("Shooting ${actual.width} \u00D7 ${actual.height}. ")
+                        if (jpegTarget?.maxRes == true && activeFormat == CaptureFormat.JPEG) {
+                            append("Shooting ${jpegTarget.width} \u00D7 ${jpegTarget.height} in full-resolution mode. ")
+                            append("The viewfinder pauses for about a second while each shot is taken.")
+                        } else if (actual != null) append("Shooting ${actual.width} \u00D7 ${actual.height}. ")
                         if (sensor != null && sensor > (sizes.firstOrNull()?.megapixels ?: 0)) {
                             append("The sensor is $sensor MP, but its full-resolution mode isn't open to other apps through CameraX.")
                         }
@@ -833,6 +843,66 @@ fun CameraScreen() {
         }
 
         val capture: () -> Unit = capture@{
+                    val fullRes = lens?.maxRes
+                    if (activeFormat == CaptureFormat.JPEG && jpegTarget?.maxRes == true && fullRes != null &&
+                        Build.VERSION.SDK_INT >= 31
+                    ) {
+                        // Full resolution: CameraX lets go of the camera, Camera2 takes one shot in
+                        // maximum-resolution sensor mode, then CameraX takes the camera back.
+                        val l = lens ?: return@capture
+                        capturing = true
+                        if (settings.hapticsOn) haptics.tick(opening = true)
+                        val telemetrySnapshot = telemetry.latest
+                        val recipeSnapshot = renderRecipe
+                        val request = MaxResRequest(
+                            cameraId = l.cameraId,
+                            info = fullRes,
+                            displayRotationDegrees = (previewView.display?.rotation ?: 0) * 90,
+                            frontFacing = l.facing == CameraSelector.LENS_FACING_FRONT,
+                            ev = meteringEv,
+                            manualShutterNs = if (resolvedExposure.manualSensor) resolvedExposure.shutterNs else null,
+                            manualIso = if (resolvedExposure.manualSensor) resolvedExposure.iso else null,
+                            awbMode = awbMode,
+                            jpegQuality = recipeSnapshot?.jpegQuality ?: 95,
+                        )
+                        val megapixels = jpegTarget.megapixels
+                        uiScope.launch {
+                            maxResBusy = true
+                            delay(50)
+                            val time = System.currentTimeMillis()
+                            val result = runCatching { captureMaxResolution(context, request) }
+                            maxResBusy = false
+                            if (settings.hapticsOn) haptics.tick(opening = false)
+                            result.onSuccess { bytes ->
+                                val main = ContextCompat.getMainExecutor(context)
+                                ioExecutor.execute {
+                                    val saved = try {
+                                        saveJpegBytes(context, bytes, time, telemetrySnapshot, recipeSnapshot)
+                                    } catch (e: Throwable) {
+                                        Log.e(TAG, "Saving the full-resolution photo failed", e)
+                                        null
+                                    }
+                                    main.execute {
+                                        Toast.makeText(
+                                            context,
+                                            if (saved != null) "$megapixels MP photo saved" else "Couldn't save the photo",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                        capturing = false
+                                    }
+                                }
+                            }.onFailure { e ->
+                                Log.e(TAG, "Full-resolution capture failed", e)
+                                Toast.makeText(
+                                    context,
+                                    "$megapixels MP capture failed (${e.message}). Try a smaller resolution in PRO.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                                capturing = false
+                            }
+                        }
+                        return@capture
+                    }
                     val b = bound ?: return@capture
                     capturing = true
                     // Feel: open click now, close tick after the exposure time; long exposures

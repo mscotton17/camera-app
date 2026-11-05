@@ -3,6 +3,7 @@ package com.example.cameraapp
 import android.annotation.SuppressLint
 import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CameraManager
 import android.os.Build
 import android.util.Log
@@ -47,10 +48,55 @@ data class Lens(
     val jpegSizes: List<JpegSize> = emptyList(),
     /** The sensor's full resolution in megapixels, if it reports one larger than apps get. */
     val sensorMaxMp: Int? = null,
+    /** Camera2 id CameraX opens for this lens (the logical camera). */
+    val cameraId: String = "",
+    /** Full-resolution ("50 MP") capture through Camera2, when the sensor supports it. */
+    val maxRes: MaxResInfo? = null,
 )
 
-/** A JPEG capture size; [highRes] sizes need CameraX's "prefer higher resolution" mode. */
-data class JpegSize(val width: Int, val height: Int, val highRes: Boolean) {
+/**
+ * How to take a full-resolution shot with Camera2: open [Lens.cameraId], stream [size] JPEG in
+ * maximum-resolution sensor mode, from [physicalId] when it's one lens of a logical camera.
+ */
+data class MaxResInfo(val size: Size, val physicalId: String?, val sensorOrientation: Int)
+
+private fun CameraCharacteristics.maxResJpegSize(): Size? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
+    val caps = get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: return null
+    if (CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_ULTRA_HIGH_RESOLUTION_SENSOR !in caps) return null
+    val map = get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION) ?: return null
+    return map.getOutputSizes(ImageFormat.JPEG).orEmpty()
+        .filter { abs(it.width.toFloat() / it.height - 4f / 3f) < 0.02f }
+        .maxByOrNull { it.width.toLong() * it.height }
+}
+
+/** Full-resolution info from [primary], or from [fallback] (a physical lens) if only it has it. */
+private fun maxResInfo(
+    primary: CameraCharacteristics, primaryPhysicalId: String?,
+    fallback: CameraCharacteristics? = null, fallbackPhysicalId: String? = null,
+): MaxResInfo? {
+    primary.maxResJpegSize()?.let {
+        return MaxResInfo(it, primaryPhysicalId, primary.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90)
+    }
+    if (fallback == null) return null
+    return fallback.maxResJpegSize()?.let {
+        MaxResInfo(it, fallbackPhysicalId, fallback.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90)
+    }
+}
+
+/** Puts the full-resolution size first when it's bigger than anything CameraX offers. */
+private fun withMaxRes(sizes: List<JpegSize>, maxRes: MaxResInfo?): List<JpegSize> {
+    val m = maxRes ?: return sizes
+    val top = sizes.firstOrNull()
+    if (top != null && m.size.width.toLong() * m.size.height <= top.width.toLong() * top.height) return sizes
+    return listOf(JpegSize(m.size.width, m.size.height, highRes = false, maxRes = true)) + sizes
+}
+
+/**
+ * A JPEG capture size. [highRes] sizes need CameraX's "prefer higher resolution" mode;
+ * [maxRes] is the sensor's full resolution, captured through the Camera2 single-shot path.
+ */
+data class JpegSize(val width: Int, val height: Int, val highRes: Boolean, val maxRes: Boolean = false) {
     val megapixels: Int get() = ((width.toLong() * height + 500_000L) / 1_000_000L).toInt()
     val size: Size get() = Size(width, height)
 }
@@ -159,10 +205,12 @@ fun enumerateLenses(context: Context, provider: ProcessCameraProvider): LensSet 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) chars.physicalCameraIds else emptySet()
             if (physicalIds.size < 2) {
                 val crop = chars.cropFactor()
+                val maxRes = maxResInfo(chars, null)
                 found += Lens(
                     logicalId, info, null, facing, chars.equivFocalMm(crop), chars.focalMm(), crop,
                     formats, exposureCaps(chars, chars),
-                    jpegSizes = chars.jpegSizes(), sensorMaxMp = chars.sensorMaxMp()
+                    jpegSizes = withMaxRes(chars.jpegSizes(), maxRes), sensorMaxMp = chars.sensorMaxMp(),
+                    cameraId = logicalId, maxRes = maxRes,
                 )
                 continue
             }
@@ -178,6 +226,9 @@ fun enumerateLenses(context: Context, provider: ProcessCameraProvider): LensSet 
                 val pc = manager.getCameraCharacteristics(pid)
                 val crop = pc.cropFactor()
                 val isMain = pid == mainId
+                // The main lens is used through the logical camera; if only its physical sensor
+                // reports full-resolution mode, target that physical camera for 50 MP shots.
+                val maxRes = if (isMain) maxResInfo(chars, null, pc, pid) else maxResInfo(pc, pid)
                 found += Lens(
                     key = if (isMain) logicalId else "$logicalId/$pid",
                     cameraInfo = info,
@@ -188,8 +239,10 @@ fun enumerateLenses(context: Context, provider: ProcessCameraProvider): LensSet 
                     cropFactor = crop,
                     supportedFormats = if (isMain || pc.hasRaw()) formats else formats - RawFormats,
                     exposure = exposureCaps(if (isMain) chars else pc, chars),
-                    jpegSizes = (if (isMain) chars else pc).jpegSizes(),
+                    jpegSizes = withMaxRes((if (isMain) chars else pc).jpegSizes(), maxRes),
                     sensorMaxMp = (if (isMain) chars else pc).sensorMaxMp(),
+                    cameraId = logicalId,
+                    maxRes = maxRes,
                 )
             }
         } catch (e: Exception) {

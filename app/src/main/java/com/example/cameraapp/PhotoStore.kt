@@ -82,26 +82,7 @@ fun takePhoto(
         override fun onImageSaved(output: ImageCapture.OutputFileResults) {
             val uri = output.savedUri
             if (uri != null && output.imageFormat != ImageFormat.RAW_SENSOR) {
-                try {
-                    writeExifIfMissing(context, uri, telemetry)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Could not write EXIF exposure data", e)
-                }
-                // Film recipes apply to the JPEG only; a DNG stays untouched sensor data.
-                if (recipe != null) {
-                    if (recipe.keepOriginal) {
-                        try {
-                            copyToAlbum(context, uri, name.substringBeforeLast('_') + "_STD", MIME_JPEG)
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Could not keep the unedited JPEG", e)
-                        }
-                    }
-                    try {
-                        applyRecipeToJpeg(context, uri, recipe, time)
-                    } catch (e: Throwable) {
-                        Log.e(TAG, "Applying ${recipe.label} failed; keeping the original JPEG", e)
-                    }
-                }
+                finishJpeg(context, uri, name, time, telemetry, recipe)
             }
             if (pending.decrementAndGet() > 0 || !finished.compareAndSet(false, true)) return
             val message = when (format) {
@@ -143,6 +124,51 @@ fun takePhoto(
         Toast.makeText(context, "Capture failed: ${e.message}", Toast.LENGTH_SHORT).show()
         onDone()
     }
+}
+
+/**
+ * After a JPEG is in the album: fill in missing exposure EXIF, keep an unedited copy if the
+ * recipe asks for one, then render the recipe into it. (A DNG stays untouched sensor data.)
+ */
+private fun finishJpeg(context: Context, uri: Uri, name: String, time: Long, telemetry: CameraTelemetry, recipe: FilmRecipe?) {
+    try {
+        writeExifIfMissing(context, uri, telemetry)
+    } catch (e: Exception) {
+        Log.w(TAG, "Could not write EXIF exposure data", e)
+    }
+    if (recipe == null) return
+    if (recipe.keepOriginal) {
+        try {
+            copyToAlbum(context, uri, name.substringBeforeLast('_') + "_STD", MIME_JPEG)
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not keep the unedited JPEG", e)
+        }
+    }
+    try {
+        applyRecipeToJpeg(context, uri, recipe, time)
+    } catch (e: Throwable) {
+        Log.e(TAG, "Applying ${recipe.label} failed; keeping the original JPEG", e)
+    }
+}
+
+/**
+ * Saves a JPEG taken outside CameraX (the full-resolution Camera2 path) into the album and
+ * finishes it exactly like a normal shot. Runs on the calling (background) thread.
+ */
+fun saveJpegBytes(
+    context: Context,
+    bytes: ByteArray,
+    time: Long,
+    telemetry: CameraTelemetry,
+    recipe: FilmRecipe?,
+): Uri? {
+    val name = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.US).format(time) +
+        (recipe?.let { "_" + fileSafe(it.label) } ?: "")
+    val resolver = context.contentResolver
+    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, albumValues(name, MIME_JPEG)) ?: return null
+    resolver.openOutputStream(uri)?.use { it.write(bytes) }
+    finishJpeg(context, uri, name, time, telemetry, recipe)
+    return uri
 }
 
 /** Copies the file at [uri] into the album as a new item. */
