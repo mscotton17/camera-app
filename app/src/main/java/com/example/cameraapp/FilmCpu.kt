@@ -200,6 +200,12 @@ private fun colorStage(rgb: FloatArray, orig: FloatArray, r: FilmRecipe, hsv: Fl
         s = (s * (1f + satAdj)).coerceIn(0f, 1f)
         v *= 1f + lumAdj * fade
     }
+    if (r.colorChrome > 0f) {
+        // Colour density: deep, saturated colours get darker in proportion to their saturation,
+        // reds and oranges most, so they read rich and dense like dye rather than glowing.
+        val hueBias = 0.4f + 0.6f * max(bandWeight(h, 0), bandWeight(h, 1))
+        v *= 1f - DENSITY_GAIN * r.colorChrome * s * smoothstep(0.2f, 0.9f, s) * hueBias
+    }
     hsvToRgb(h, s, v, rgb)
     if (r.skinProtect > 0f) {
         rgbToHsv(orig[0], orig[1], orig[2], hsv)
@@ -268,7 +274,10 @@ fun applyRecipe(bitmap: Bitmap, recipe: FilmRecipe, rect: Rect = Rect(0, 0, bitm
     val vignette = recipe.vignette * VIGNETTE_DEPTH
     val vignetteStart = 1f - recipe.vignetteFeather.coerceIn(0.05f, 1f)
     val grainLevels = recipe.grain * 255f
-    val grainCell = max(1f, rw * GRAIN_CELL * recipe.grainSize)
+    val grainCell = max(GRAIN_MIN_CELL, rw * GRAIN_CELL * recipe.grainSize)
+    val desatAmount = recipe.highlightDesatAmount.coerceIn(0f, 1f)
+    val desatStart = recipe.highlightDesatStart
+    val desatEnd = max(desatStart + 0.02f, recipe.whitePoint)
     val grainShadow = grainShadowDirection(recipe)
     val grainMid = grainMidDirection(recipe)
     val leakAngle = Math.toRadians(recipe.lightLeakAngle.toDouble())
@@ -315,12 +324,21 @@ fun applyRecipe(bitmap: Bitmap, recipe: FilmRecipe, rect: Rect = Rect(0, 0, bitm
         out[0] = acc[0] / 9f; out[1] = acc[1] / 9f; out[2] = acc[2] / 9f
     }
 
-    /** Grain value in [-1, 1]: smooth cells mixed with per-pixel noise by roughness. */
+    /**
+     * Grain value in [-1, 1], formed in small organic clusters: two octaves of smooth noise (the
+     * grain and finer sub-grains) shaped by a larger clump envelope, so grains bunch together
+     * the way silver halide does. Roughness mixes in some sharp per-pixel grit within the clumps.
+     */
     fun grainAt(x: Int, y: Int, s: Int): Float {
-        val pixel = hashNoise(x, y, s)
-        if (grainCell <= 1.01f) return pixel
-        val smooth = valueNoise(x / grainCell, y / grainCell, s)
-        return smooth + (pixel - smooth) * recipe.grainRoughness
+        val fx = x / grainCell
+        val fy = y / grainCell
+        val coarse = valueNoise(fx, fy, s)
+        val fine = valueNoise(fx / GRAIN_FINE_SCALE + 17.3f, fy / GRAIN_FINE_SCALE + 5.1f, s + 7)
+        val clump = valueNoise(fx / GRAIN_CLUMP_SCALE + 3.7f, fy / GRAIN_CLUMP_SCALE + 9.2f, s + 13)
+        val env = 0.35f + 0.65f * (clump * 0.5f + 0.5f)
+        var n = (0.6f * coarse + 0.4f * fine) * env * GRAIN_CLUMP_NORM
+        if (recipe.grainRoughness > 0f) n += (hashNoise(x, y, s) * env - n) * recipe.grainRoughness * 0.5f
+        return n.coerceIn(-1f, 1f)
     }
 
     val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
@@ -433,6 +451,16 @@ fun applyRecipe(bitmap: Bitmap, recipe: FilmRecipe, rect: Rect = Rect(0, 0, bitm
                     var outR = lut[fr.roundToInt().coerceIn(0, 255)].toFloat()
                     var outG = lut[256 + fg.roundToInt().coerceIn(0, 255)].toFloat()
                     var outB = lut[512 + fb.roundToInt().coerceIn(0, 255)].toFloat()
+                    // 6b. Highlight saturation roll-off: ease colours toward neutral white as they
+                    // approach the white point, instead of clipping one channel at a time.
+                    if (desatAmount > 0f) {
+                        val l = (LR * outR + LG * outG + LB * outB) / 255f
+                        val w = smoothstep(desatStart, desatEnd, l) * desatAmount
+                        if (w > 0f) {
+                            val n = l * 255f
+                            outR += (n - outR) * w; outG += (n - outG) * w; outB += (n - outB) * w
+                        }
+                    }
                     // 7. Bleach bypass: overlay a black-and-white copy, then pull saturation down.
                     if (recipe.bleachBypass > 0f) {
                         val l = (LR * outR + LG * outG + LB * outB) / 255f

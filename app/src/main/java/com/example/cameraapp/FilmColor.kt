@@ -42,6 +42,15 @@ internal const val SHADOW_RECOVERY_GAIN = 0.8f
 internal const val GRAIN_CELL = 1f / 2400f
 /** Value noise averages neighbouring cells; this restores its contrast to match per-pixel grain. */
 internal const val GRAIN_SMOOTH_BOOST = 1.4f
+/** Grain: smallest cell in pixels (so it always forms clusters, never single-pixel static), the
+ * fine octave's and clump envelope's scales relative to the cell, and the gain that restores
+ * the strength lost by mixing octaves. */
+internal const val GRAIN_MIN_CELL = 1.6f
+internal const val GRAIN_FINE_SCALE = 0.55f
+internal const val GRAIN_CLUMP_SCALE = 2.8f
+internal const val GRAIN_CLUMP_NORM = 1.6f
+/** Colour density: how far fully saturated colours (reds / oranges most) are darkened at colour chrome 1. */
+internal const val DENSITY_GAIN = 0.22f
 /** HSL changes fade in over this much saturation, so greys are never shifted. */
 internal const val HSL_SAT_FADE = 0.25f
 /** Lens effects at strength 1, as a fraction of image width at the corners. */

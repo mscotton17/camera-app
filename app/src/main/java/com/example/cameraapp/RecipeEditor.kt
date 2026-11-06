@@ -317,6 +317,8 @@ private fun editorTabs(
                 sub("BALANCE"), param("redGain"), param("blueGain"), param("hueShift"),
                 sub("SATURATION"), param("satR"), param("satG"), param("satB"),
                 param("highlightSat"), param("shadowSat"),
+                sub("HIGHLIGHT ROLL-OFF"), param("highlightDesatAmount"), param("highlightDesatStart"),
+                note("Bright colours ease toward white from the start point up to the white point, like film, instead of clipping."),
                 sub("FILM COLOR"), param("colorChrome"), param("colorChromeBlue"), param("bleachBypass"), param("skinProtect"),
                 sub("COLOR BANDS (HSL)"), bands,
                 sub("CHANNEL MIXER"), mixer,

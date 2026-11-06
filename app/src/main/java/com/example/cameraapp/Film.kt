@@ -153,6 +153,10 @@ data class FilmRecipe(
     val satB: Float = 1f,
     val vibrance: Float = 0f,
     val highlightSat: Float = 0f,
+    /** Highlight saturation roll-off: from this luminance up to the white point... */
+    val highlightDesatStart: Float = 0.78f,
+    /** ...colours ease toward neutral white by up to this much, so they never clip digitally. */
+    val highlightDesatAmount: Float = 0.70f,
     val shadowSat: Float = 0f,
     val colorChrome: Float = 0f,
     val colorChromeBlue: Float = 0f,
@@ -273,7 +277,7 @@ data class FilmRecipe(
     /** Anything in the per-pixel colour stage (step 3) is active. */
     internal val hasColorStage: Boolean
         get() = hasHsl || vibrance != 0f || highlightSat != 0f || shadowSat != 0f ||
-            colorChromeBlue > 0f || skinProtect > 0f
+            colorChromeBlue > 0f || skinProtect > 0f || colorChrome > 0f
 
     internal val hasOptics: Boolean get() = sharpen != 0f || cornerSoftness > 0f || chromaticAberration > 0f
     internal val hasLocalTone: Boolean get() = highlightRecovery > 0f || shadowRecovery > 0f

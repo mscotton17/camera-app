@@ -76,6 +76,9 @@ uniform float grainColorBias;
 uniform float3 grainDirS;       // colour-grain tint direction in shadows (zero-sum, max 1)
 uniform float3 grainDirM;       // ... and in the mids
 uniform float3 grainTone;       // shadows, mids, highlights
+uniform float4 grainShape;      // min cell px, fine scale, clump scale, norm
+uniform float3 hlDesat;         // start, end (white point), amount
+uniform float densityGain;
 
 float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
@@ -99,21 +102,31 @@ float3 lensSample(float2 q, float blurR) {
     return c / 9.0;
 }
 
-float noise01(float2 p, float2 o) {
-    float px = hashS(floor(p) + o, seed);
-    float cell = max(1.0, frame.z * grainCellFraction);
-    if (cell <= 1.01) return px;
-    float2 q = p / cell;
+// Smooth value noise in [-1, 1], contrast restored like the CPU's.
+float vnoise(float2 q, float2 o, float s) {
     float2 i = floor(q);
     float2 f = fract(q);
     f = f * f * (3.0 - 2.0 * f);
-    float a = hashS(i + o, seed);
-    float b = hashS(i + float2(1.0, 0.0) + o, seed);
-    float c = hashS(i + float2(0.0, 1.0) + o, seed);
-    float d = hashS(i + float2(1.0, 1.0) + o, seed);
+    float a = hashS(i + o, s);
+    float b = hashS(i + float2(1.0, 0.0) + o, s);
+    float c = hashS(i + float2(0.0, 1.0) + o, s);
+    float d = hashS(i + float2(1.0, 1.0) + o, s);
     float v = mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-    float sm = clamp((v - 0.5) * grainBoost + 0.5, 0.0, 1.0);
-    return mix(sm, px, grainRough);
+    return clamp((v * 2.0 - 1.0) * grainBoost, -1.0, 1.0);
+}
+
+// Clumped grain in [0, 1]: grain + finer sub-grains shaped by a larger clump envelope.
+float noise01(float2 p, float2 o) {
+    float cell = max(grainShape.x, frame.z * grainCellFraction);
+    float2 q = p / cell;
+    float coarse = vnoise(q, o, seed);
+    float fine = vnoise(q / grainShape.y + float2(17.3, 5.1), o, seed + 7.0);
+    float clump = vnoise(q / grainShape.z + float2(3.7, 9.2), o, seed + 13.0);
+    float env = 0.35 + 0.65 * (clump * 0.5 + 0.5);
+    float n = (0.6 * coarse + 0.4 * fine) * env * grainShape.w;
+    float px = hashS(floor(p) + o, seed) * 2.0 - 1.0;
+    n += (px * env - n) * grainRough * 0.5;
+    return clamp(n, -1.0, 1.0) * 0.5 + 0.5;
 }
 
 float bump(float l, float c, float w) { float t = (l - c) / w; return max(0.0, 1.0 - t * t); }
@@ -227,6 +240,12 @@ half4 main(float2 p) {
             hsv.y = clamp(hsv.y * (1.0 + satAdj), 0.0, 1.0);
             hsv.z = hsv.z * (1.0 + lumAdj * fade);
         }
+        if (colorChrome > 0.0) {
+            // Colour density: saturated colours (reds / oranges most) darken with saturation.
+            float4 wD = bandWeights(hsv.x, hslCenterA, hslRightA, hslLeftA);
+            float hueBias = 0.4 + 0.6 * max(wD.x, wD.y);
+            hsv.z *= 1.0 - densityGain * colorChrome * hsv.y * smoothstep(0.2, 0.9, hsv.y) * hueBias;
+        }
         rgb = hsv2rgb(hsv);
         if (skin.z > 0.0) {
             float3 o = rgb2hsv(clamp(src, 0.0, 1.0));
@@ -281,6 +300,12 @@ half4 main(float2 p) {
         lut.eval(float2(rgb.r * 255.0 + 0.5, 0.5)).r,
         lut.eval(float2(rgb.g * 255.0 + 0.5, 0.5)).g,
         lut.eval(float2(rgb.b * 255.0 + 0.5, 0.5)).b);
+
+    // 6b. Highlight saturation roll-off toward neutral white.
+    if (hlDesat.z > 0.0) {
+        float l = luma(rgb);
+        rgb = mix(rgb, float3(l), smoothstep(hlDesat.x, hlDesat.y, l) * hlDesat.z);
+    }
 
     // 7. Bleach bypass.
     if (bleach > 0.0) {
@@ -395,6 +420,8 @@ class FilmPreviewShader {
         shader.setFloatUniform("hslSatFade", HSL_SAT_FADE)
         shader.setFloatUniform("localRadius", LOCAL_RADIUS)
         shader.setFloatUniform("grainBoost", GRAIN_SMOOTH_BOOST)
+        shader.setFloatUniform("grainShape", GRAIN_MIN_CELL, GRAIN_FINE_SCALE, GRAIN_CLUMP_SCALE, GRAIN_CLUMP_NORM)
+        shader.setFloatUniform("densityGain", DENSITY_GAIN)
         shader.setFloatUniform("seed", 0f)
         shader.setFloatUniform("frame", 0f, 0f, 1f, 1f)
         update(FilmRecipe(id = "neutral", label = ""), null)
@@ -476,6 +503,9 @@ class FilmPreviewShader {
         shader.setFloatUniform("grainDirS", ds[0], ds[1], ds[2])
         shader.setFloatUniform("grainDirM", dm[0], dm[1], dm[2])
         shader.setFloatUniform("grainTone", r.grainShadows, r.grainMids, r.grainHighlights)
+        shader.setFloatUniform(
+            "hlDesat", r.highlightDesatStart, maxOf(r.highlightDesatStart + 0.02f, r.whitePoint), r.highlightDesatAmount.coerceIn(0f, 1f)
+        )
     }
 
     /**
