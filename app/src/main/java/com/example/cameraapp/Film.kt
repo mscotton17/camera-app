@@ -298,18 +298,21 @@ val FilmRecipes: List<FilmRecipe> = listOf(
         aspect = AspectRatio.THREE_TWO,
         whiteBalance = WhiteBalance.AUTO, defaultEvOn = true, defaultEv = 0f,
     ),
-    // Pushed HP5: crisp contrast, punchy micro-texture, gentle sky separation through a
-    // yellow-ish filter mix, fine organic grain; 3:2 frame.
+    // Pushed HP5: Acros-through-a-yellow-filter pushed street look — deep anchored blacks,
+    // creamy highlight roll-off, sculpted midtones, grain kept to the shadows and mids.
     FilmRecipe(
         id = "pushed_hp5", label = "PUSHED HP5",
         mono = Triple(0.38f, 0.47f, 0.15f),
-        contrast = 0.12f, blackPoint = 0f, shadows = -0.055f, mids = -0.020f, highlights = -0.040f, whitePoint = 0.970f,
-        toe = 0.06f, shoulder = 0.45f, dynamicRange = DynamicRange.DR100,
-        sharpen = 0.15f,
-        clarity = 0.12f, clarityRadius = 0.9f,
-        vignette = 0.12f, vignetteFeather = 0.80f, vignetteRoundness = 1.0f,
-        grain = 0.025f, grainSize = 1.0f, grainColor = 0f, grainRoughness = 0.35f,
-        grainShadows = 1.2f, grainMids = 1.0f, grainHighlights = 0.1f,
+        contrast = 0.12f, blackPoint = 0f, shadows = -0.055f, mids = -0.015f, highlights = -0.040f, whitePoint = 0.970f,
+        toe = 0.06f, shoulder = 0.45f, highlightRecovery = 0.05f, shadowRecovery = 0f, dynamicRange = DynamicRange.DR100,
+        curves = mapOf(
+            CurveChannel.MASTER to listOf(0f, -0.020f, -0.035f, -0.015f, 0f, 0.015f, -0.010f, -0.035f, -0.030f)
+        ),
+        sharpen = 0.12f, cornerSoftness = 0f, chromaticAberration = 0f,
+        clarity = 0.18f, clarityRadius = 0.8f,
+        vignette = 0.14f, vignetteFeather = 0.80f, vignetteRoundness = 1.0f,
+        grain = 0.032f, grainSize = 1.1f, grainColor = 0f, grainRoughness = 0.35f,
+        grainShadows = 1.4f, grainMids = 1.0f, grainHighlights = 0.05f,
         aspect = AspectRatio.THREE_TWO,
         whiteBalance = WhiteBalance.AUTO, defaultEvOn = true, defaultEv = 0f,
     ),
