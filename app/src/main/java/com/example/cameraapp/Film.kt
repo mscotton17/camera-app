@@ -303,8 +303,8 @@ val FilmRecipes: List<FilmRecipe> = listOf(
     FilmRecipe(
         id = "pushed_hp5", label = "PUSHED HP5",
         mono = Triple(0.38f, 0.47f, 0.15f),
-        contrast = 0.10f, blackPoint = 0.005f, shadows = -0.035f, mids = -0.020f, highlights = -0.040f, whitePoint = 0.970f,
-        toe = 0.10f, shoulder = 0.45f, dynamicRange = DynamicRange.DR100,
+        contrast = 0.12f, blackPoint = 0f, shadows = -0.055f, mids = -0.020f, highlights = -0.040f, whitePoint = 0.970f,
+        toe = 0.06f, shoulder = 0.45f, dynamicRange = DynamicRange.DR100,
         sharpen = 0.15f,
         clarity = 0.12f, clarityRadius = 0.9f,
         vignette = 0.12f, vignetteFeather = 0.80f, vignetteRoundness = 1.0f,
