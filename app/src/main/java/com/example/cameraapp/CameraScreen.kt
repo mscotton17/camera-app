@@ -552,7 +552,7 @@ fun CameraScreen() {
         }
     }
 
-    CompositionLocalProvider(LocalIconRotation provides iconRotation) {
+    CompositionLocalProvider(LocalIconRotation provides iconRotation, LocalDeviceOrientation provides deviceOrientation) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         // Portrait: the band between the top icons and the recipe strip, where the viewfinder
         // frame is centred so the recipes sit below it rather than over the picture.

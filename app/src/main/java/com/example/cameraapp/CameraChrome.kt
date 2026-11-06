@@ -181,9 +181,10 @@ fun TopIconBar(
 }
 
 /**
- * Exposure compensation as a small ruler: drag sideways to scroll it in 1/3-stop clicks (drag
- * left for brighter), double-tap to go back to ±0. It turns with the phone like the icons, and
- * drags follow the way it's turned. Greyed out in full manual, where EV isn't used.
+ * Exposure compensation as a small ruler: drag along it to scroll in 1/3-stop clicks, double-tap
+ * to go back to ±0. Upright it reads left to right (drag left for brighter). Held sideways the
+ * ruler stays put, so it runs up and down as you hold the phone (drag up for brighter), and
+ * only its number turns to read upright. Greyed out in full manual, where EV isn't used.
  */
 @Composable
 private fun EvDial(ev: Float, enabled: Boolean, onEv: (Float) -> Unit, onStep: () -> Unit) {
@@ -198,7 +199,13 @@ private fun EvDial(ev: Float, enabled: Boolean, onEv: (Float) -> Unit, onStep: (
             latestOnStep()
         }
     }
-    RotateWithDevice {
+    val orientation = LocalDeviceOrientation.current
+    val sideways = orientation == 90 || orientation == 270
+    // Sideways, "up" for the person holding the phone is the screen's left (phone turned
+    // clockwise) or right (anticlockwise); flip the ruler so up is always brighter.
+    val dir = if (orientation == 270) -1 else 1
+    val dial: @Composable (@Composable () -> Unit) -> Unit = { c -> if (sideways) c() else RotateWithDevice { c() } }
+    dial {
         Column(
             Modifier
                 .width(124.dp)
@@ -208,15 +215,15 @@ private fun EvDial(ev: Float, enabled: Boolean, onEv: (Float) -> Unit, onStep: (
                     if (!enabled) return@pointerInput
                     detectTapGestures(onDoubleTap = { if (latestEv != 0f) { latestOnEv(0f); latestOnStep() } })
                 }
-                .pointerInput(enabled) {
+                .pointerInput(enabled, dir) {
                     if (!enabled) return@pointerInput
                     val stepPx = 14.dp.toPx()
                     var acc = 0f
                     detectHorizontalDragGestures(onDragStart = { acc = 0f }) { change, dx ->
                         change.consume()
                         acc += dx
-                        while (acc <= -stepPx) { acc += stepPx; step(1) }
-                        while (acc >= stepPx) { acc -= stepPx; step(-1) }
+                        while (acc <= -stepPx) { acc += stepPx; step(dir) }
+                        while (acc >= stepPx) { acc -= stepPx; step(-dir) }
                     }
                 }
                 .semantics { contentDescription = "Exposure compensation ${formatEv(ev)}. Drag sideways to change." }
@@ -224,19 +231,22 @@ private fun EvDial(ev: Float, enabled: Boolean, onEv: (Float) -> Unit, onStep: (
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Text(
-                formatEv(ev) + " EV",
-                color = if (enabled && kotlin.math.abs(ev) > 0.05f) HudAmber else Color.White,
-                fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.SemiBold
-            )
+            val label: @Composable () -> Unit = {
+                Text(
+                    if (sideways) formatEv(ev) else formatEv(ev) + " EV",
+                    color = if (enabled && kotlin.math.abs(ev) > 0.05f) HudAmber else Color.White,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            if (sideways) RotateWithDevice { label() } else label()
             Canvas(Modifier.padding(top = 3.dp).fillMaxWidth().height(12.dp)) {
                 val spacing = 14.dp.toPx() / 1.6f
                 val cx = size.width / 2f
                 val current = EvOptions.indices.minByOrNull { kotlin.math.abs(EvOptions[it] - ev) } ?: 9
                 for (i in EvOptions.indices) {
-                    val x = cx + (i - current) * spacing
+                    val x = cx + (i - current) * spacing * dir
                     if (x < 0f || x > size.width) continue
                     val whole = (i - 9) % 3 == 0
                     val fade = 1f - kotlin.math.abs(x - cx) / (size.width / 2f)
@@ -275,6 +285,9 @@ private fun IconSlot(
  * locked to portrait; this follows how the phone is actually held.
  */
 val LocalIconRotation = compositionLocalOf { 0f }
+
+/** How the phone is held, snapped to 0 / 90 / 180 / 270 degrees clockwise. */
+val LocalDeviceOrientation = compositionLocalOf { 0 }
 
 /** Turns [content] in place to match how the phone is held (see [LocalIconRotation]). */
 @Composable
