@@ -120,7 +120,10 @@ fun takePhoto(
                 // Develop the JPEG from the DNG itself, with the recipe (or neutral).
                 DevelopQueue.submit {
                     val look = recipe ?: FilmRecipe(id = "", label = "")
-                    val jpeg = developImage(context, uri, look, displayName = name, time = time)
+                    val jpeg = developImage(
+                        context, uri, look, displayName = name, time = time,
+                        rawGain = (telemetry.postRawBoost ?: 100) / 100f,
+                    )
                     if (jpeg == null) mainExecutor.execute {
                         Toast.makeText(context, "Couldn't develop the DNG; it's saved in your photos", Toast.LENGTH_SHORT).show()
                     } else {
@@ -332,6 +335,8 @@ fun developImage(
     displayName: String? = null,
     /** Capture time, when known; otherwise read from the file. */
     time: Long? = null,
+    /** Brightness the camera added after RAW (post-RAW boost), for our own DNG development. */
+    rawGain: Float = 1f,
 ): Uri? {
     val resolver = context.contentResolver
     val savedExif = try {
@@ -347,8 +352,17 @@ fun developImage(
         }
     } ?: System.currentTimeMillis()
 
-    // ImageDecoder renders DNGs and applies orientation, so the result is already upright.
-    var bitmap: Bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+    // DNGs: our own development from the raw sensor data (see RawDevelop.kt). Anything it can't
+    // read, and every other image, goes through Android's decoder, which renders DNGs and
+    // applies orientation, so either way the result is upright.
+    val isDng = (resolver.getType(source)?.contains("dng", ignoreCase = true) == true) ||
+        resolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            c.moveToFirst() && c.getString(0)?.endsWith(".dng", ignoreCase = true) == true
+        } == true
+    val ownRaw = if (isDng) developRawDng(context, source, rawGain) else null
+    var bitmap: Bitmap = if (ownRaw != null) {
+        ownRaw
+    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
         ImageDecoder.decodeBitmap(ImageDecoder.createSource(resolver, source)) { decoder, _, _ ->
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             decoder.isMutableRequired = true

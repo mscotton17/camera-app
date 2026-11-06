@@ -62,6 +62,8 @@ data class ExposureCaps(
     /** Sensor area metering regions are given in, and how many AE regions it takes. */
     val activeArray: android.graphics.Rect? = null,
     val maxAeRegions: Int = 0,
+    /** The camera can report its lens-shading map, so DNGs carry it for our raw development. */
+    val lensShadingMap: Boolean = false,
 ) {
     /** The camera can be given a fixed tone curve instead of its scene-adaptive one. */
     val fixedToneCurve: Boolean
@@ -87,6 +89,8 @@ private fun exposureCaps(lensChars: CameraCharacteristics, cameraChars: CameraCh
         toneModes = cameraChars.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)?.toSet().orEmpty(),
         activeArray = cameraChars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE),
         maxAeRegions = cameraChars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0,
+        lensShadingMap = cameraChars.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_LENS_SHADING_MAP_MODES)
+            ?.contains(CameraCharacteristics.STATISTICS_LENS_SHADING_MAP_MODE_ON) == true,
     )
 
 data class LensSet(val lenses: List<Lens>, private val defaults: Map<Int, String>) {

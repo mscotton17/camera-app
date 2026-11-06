@@ -51,6 +51,8 @@ data class CameraTelemetry(
     val focalLengthMm: Float? = null,
     /** 35mm-equivalent focal length; null if the sensor size is unknown. */
     val focalLength35mm: Float? = null,
+    /** Digital gain the camera applies after RAW (100 = none); a DNG is darker by this much. */
+    val postRawBoost: Int? = null,
 )
 
 /** Diagonal of a 36x24mm full-frame sensor. */
@@ -125,6 +127,7 @@ class TelemetryTracker {
                 iso = result.get(CaptureResult.SENSOR_SENSITIVITY),
                 focalLengthMm = focal,
                 focalLength35mm = if (focal != null && crop != null) focal * crop else null,
+                postRawBoost = result.get(CaptureResult.CONTROL_POST_RAW_SENSITIVITY_BOOST),
             )
             latest = t
             val now = SystemClock.uptimeMillis()

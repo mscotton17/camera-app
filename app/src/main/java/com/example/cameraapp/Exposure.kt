@@ -248,6 +248,12 @@ fun applyExposure(
             }
         }
     }
+    if (caps?.lensShadingMap == true) {
+        // Report the lens-shading map, so DNGs include it (as gain maps) and our raw development
+        // can correct the corners the way the camera's own processing does.
+        builder.setCaptureRequestOption(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)
+        any = true
+    }
     val area = caps?.activeArray
     val autoExposure = shutter == null || iso == null
     if (autoExposure && area != null && (caps?.maxAeRegions ?: 0) > 0 && metering != MeteringMode.MATRIX) {
