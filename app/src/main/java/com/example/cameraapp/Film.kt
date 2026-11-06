@@ -298,21 +298,24 @@ val FilmRecipes: List<FilmRecipe> = listOf(
         aspect = AspectRatio.THREE_TWO,
         whiteBalance = WhiteBalance.AUTO, defaultEvOn = true, defaultEv = 0f,
     ),
-    // Pushed HP5: Acros-through-a-yellow-filter pushed street look — deep anchored blacks,
-    // creamy highlight roll-off, sculpted midtones, grain kept to the shadows and mids.
+    // Pushed HP5: true pushed Ilford HP5 Plus — prominent organic grain across the midtones,
+    // scooped lower mids for acutance, deep pinned blacks, creamy shoulder, subtle halation.
     FilmRecipe(
         id = "pushed_hp5", label = "PUSHED HP5",
         mono = Triple(0.38f, 0.47f, 0.15f),
-        contrast = 0.12f, blackPoint = 0f, shadows = -0.055f, mids = -0.015f, highlights = -0.040f, whitePoint = 0.970f,
-        toe = 0.06f, shoulder = 0.45f, highlightRecovery = 0.05f, shadowRecovery = 0f, dynamicRange = DynamicRange.DR100,
+        contrast = 0.16f, blackPoint = 0f, shadows = -0.060f, mids = -0.030f, highlights = -0.040f, whitePoint = 0.970f,
+        toe = 0.05f, shoulder = 0.40f, highlightRecovery = 0.05f, shadowRecovery = 0f, dynamicRange = DynamicRange.DR100,
         curves = mapOf(
-            CurveChannel.MASTER to listOf(0f, -0.020f, -0.035f, -0.015f, 0f, 0.015f, -0.010f, -0.035f, -0.030f)
+            CurveChannel.MASTER to listOf(0f, -0.025f, -0.035f, -0.020f, 0f, 0.015f, -0.010f, -0.035f, -0.030f)
         ),
-        sharpen = 0.12f, cornerSoftness = 0f, chromaticAberration = 0f,
-        clarity = 0.18f, clarityRadius = 0.8f,
-        vignette = 0.14f, vignetteFeather = 0.80f, vignetteRoundness = 1.0f,
-        grain = 0.032f, grainSize = 1.1f, grainColor = 0f, grainRoughness = 0.35f,
-        grainShadows = 1.4f, grainMids = 1.0f, grainHighlights = 0.05f,
+        sharpen = 0.14f, cornerSoftness = 0f, chromaticAberration = 0f,
+        clarity = 0.26f, clarityRadius = 0.75f,
+        // Black-and-white film has no colour layers, so its halation is a neutral glow.
+        halation = 0.10f, halationThreshold = 0.82f, halationRadius = 0.8f, halationColor = Tint(1f, 1f, 1f),
+        bloom = 0f,
+        vignette = 0.16f, vignetteFeather = 0.80f, vignetteRoundness = 1.0f,
+        grain = 0.048f, grainSize = 1.35f, grainColor = 0f, grainRoughness = 0.50f,
+        grainShadows = 1.1f, grainMids = 1.2f, grainHighlights = 0.15f,
         aspect = AspectRatio.THREE_TWO,
         whiteBalance = WhiteBalance.AUTO, defaultEvOn = true, defaultEv = 0f,
     ),
