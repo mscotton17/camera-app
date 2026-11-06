@@ -144,8 +144,9 @@ fun CameraScreen() {
     var lensSet by remember { mutableStateOf<LensSet?>(null) }
     var selectedLensKey by rememberSaveable { mutableStateOf<String?>(null) }
     // JPEG by default; RAW / RAW+JPG can be picked from the RAW badge or the menu.
-    // Default: shoot DNG and develop it with the film engine (JPG where the lens has no RAW).
-    var format by rememberSaveable { mutableStateOf(CaptureFormat.DNG_FILM) }
+    // Always shoots DNG and develops it with the film engine; JPG only where a lens has no RAW
+    // (or binding RAW fails). Each lens gets another try at DNG when picked.
+    var format by remember { mutableStateOf(CaptureFormat.DNG_FILM) }
     var flash by rememberSaveable { mutableStateOf(FlashSetting.OFF) }
     var bound by remember { mutableStateOf<BoundCamera?>(null) }
     var capturing by remember { mutableStateOf(false) }
@@ -390,7 +391,6 @@ fun CameraScreen() {
     LaunchedEffect(selectedRecipe?.id) {
         val r = selectedRecipe ?: return@LaunchedEffect
         if (r.defaultEvOn) evComp = r.defaultEv
-        r.defaultFormat.format?.let { format = it }
         if (r.defaultLensMm > 0) {
             val facing = lens?.facing ?: CameraSelector.LENS_FACING_BACK
             lensSet?.forFacing(facing)
@@ -409,6 +409,7 @@ fun CameraScreen() {
     var spotSensor by remember { mutableStateOf<android.graphics.PointF?>(null) }
     var spotView by remember { mutableStateOf<android.graphics.PointF?>(null) }
     LaunchedEffect(lens?.key, settings.metering) { spotSensor = null; spotView = null }
+    LaunchedEffect(lens?.key) { format = CaptureFormat.DNG_FILM }
     LaunchedEffect(bound, resolvedExposure, awbMode, settings.naturalTone, settings.metering, spotSensor) {
         bound?.camera?.let {
             applyExposure(
@@ -788,22 +789,16 @@ fun CameraScreen() {
             }
         }
         val flashAvailable = !resolvedExposure.manualSensor && bound?.camera?.cameraInfo?.hasFlashUnit() == true
-        val formatAvailable = lens != null && ImageCapture.OUTPUT_FORMAT_RAW in lens.supportedFormats
-        val cycleFormat: () -> Unit = cycle@{
-            val l = lens ?: return@cycle
-            var next = activeFormat.nextFor(l)
-            // RAW alone can't carry a recipe, so skip it while one is on.
-            if (recipe != null && next == CaptureFormat.RAW) next = next.nextFor(l)
-            format = next
-        }
+        val evStep: () -> Unit = { if (settings.hapticsOn) haptics.tick(opening = false) }
         val topBar: @Composable (Modifier, Boolean) -> Unit = { m, compact ->
             TopIconBar(
                 flash = flash,
                 flashAvailable = flashAvailable,
                 onFlash = { flash = flash.next() },
-                format = activeFormat,
-                formatAvailable = formatAvailable,
-                onFormat = cycleFormat,
+                ev = evComp,
+                evAvailable = !fullManual,
+                onEv = { evComp = it },
+                onEvStep = evStep,
                 timerSeconds = timerSec,
                 onMenu = { menuOpen = !menuOpen },
                 menuOpen = menuOpen,
@@ -848,9 +843,10 @@ fun CameraScreen() {
                 flash = flash,
                 flashAvailable = flashAvailable,
                 onFlash = { flash = flash.next() },
-                format = activeFormat,
-                formatAvailable = formatAvailable,
-                onFormat = cycleFormat,
+                ev = evComp,
+                evAvailable = !fullManual,
+                onEv = { evComp = it },
+                onEvStep = evStep,
                 timerSeconds = timerSec,
                 onMenu = { menuOpen = !menuOpen },
                 menuOpen = menuOpen,
@@ -1152,8 +1148,8 @@ fun CameraScreen() {
             Scrim { menuOpen = false }
             SidewaysHost(deviceOrientation) { sideways ->
             MenuSheet(
-                formats = listOf(CaptureFormat.DNG_FILM, CaptureFormat.JPEG, CaptureFormat.RAW, CaptureFormat.RAW_JPEG)
-                    .filter { it.outputFormat in lens?.supportedFormats.orEmpty() },
+                // Format is fixed (DNG developed with the film engine), so no format row.
+                formats = emptyList(),
                 format = activeFormat,
                 // A recipe needs a JPEG to bake into, so RAW alone is off while one is on.
                 disabledFormats = if (recipe != null) setOf(CaptureFormat.RAW) else emptySet(),

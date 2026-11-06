@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.navigationBars
@@ -116,9 +117,11 @@ fun TopIconBar(
     flash: FlashSetting,
     flashAvailable: Boolean,
     onFlash: () -> Unit,
-    format: CaptureFormat,
-    formatAvailable: Boolean,
-    onFormat: () -> Unit,
+    ev: Float,
+    evAvailable: Boolean,
+    onEv: (Float) -> Unit,
+    /** Called on every 1/3-stop click while dragging (for a haptic tick). */
+    onEvStep: () -> Unit,
     timerSeconds: Int,
     onMenu: () -> Unit,
     menuOpen: Boolean,
@@ -143,28 +146,7 @@ fun TopIconBar(
             }
         }
     }
-    if (formatAvailable) items += {
-        IconSlot("Format ${format.label}", slot, onClick = onFormat) {
-            val raw = format != CaptureFormat.JPEG
-            Box(
-                Modifier
-                    .border(1.5.dp, if (raw) HudAmber else Dim, RoundedCornerShape(5.dp))
-                    .padding(horizontal = 5.dp, vertical = 2.dp)
-            ) {
-                Text(
-                    when (format) {
-                        CaptureFormat.DNG_FILM -> "FILM"
-                        CaptureFormat.JPEG -> "JPG"
-                        else -> "RAW"
-                    },
-                    color = if (raw) HudAmber else Dim,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace
-                )
-            }
-        }
-    }
+    items += { EvDial(ev, evAvailable, onEv, onEvStep) }
     if (timerSeconds > 0) items += {
         IconSlot("Self-timer ${timerSeconds} seconds", slot, onClick = onMenu) {
             Text("\u23F2 ${timerSeconds}s", color = HudAmber, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
@@ -195,6 +177,78 @@ fun TopIconBar(
             horizontalArrangement = if (compact) Arrangement.SpaceEvenly else Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) { ordered.forEach { it() } }
+    }
+}
+
+/**
+ * Exposure compensation as a small ruler: drag sideways to scroll it in 1/3-stop clicks (drag
+ * left for brighter), double-tap to go back to ±0. It turns with the phone like the icons, and
+ * drags follow the way it's turned. Greyed out in full manual, where EV isn't used.
+ */
+@Composable
+private fun EvDial(ev: Float, enabled: Boolean, onEv: (Float) -> Unit, onStep: () -> Unit) {
+    val latestEv by androidx.compose.runtime.rememberUpdatedState(ev)
+    val latestOnEv by androidx.compose.runtime.rememberUpdatedState(onEv)
+    val latestOnStep by androidx.compose.runtime.rememberUpdatedState(onStep)
+    fun step(by: Int) {
+        val i = EvOptions.indices.minByOrNull { kotlin.math.abs(EvOptions[it] - latestEv) } ?: return
+        val next = (i + by).coerceIn(0, EvOptions.lastIndex)
+        if (next != i) {
+            latestOnEv(EvOptions[next])
+            latestOnStep()
+        }
+    }
+    RotateWithDevice {
+        Column(
+            Modifier
+                .width(124.dp)
+                .height(46.dp)
+                .clip(RoundedCornerShape(23.dp))
+                .pointerInput(enabled) {
+                    if (!enabled) return@pointerInput
+                    detectTapGestures(onDoubleTap = { if (latestEv != 0f) { latestOnEv(0f); latestOnStep() } })
+                }
+                .pointerInput(enabled) {
+                    if (!enabled) return@pointerInput
+                    val stepPx = 14.dp.toPx()
+                    var acc = 0f
+                    detectHorizontalDragGestures(onDragStart = { acc = 0f }) { change, dx ->
+                        change.consume()
+                        acc += dx
+                        while (acc <= -stepPx) { acc += stepPx; step(1) }
+                        while (acc >= stepPx) { acc -= stepPx; step(-1) }
+                    }
+                }
+                .semantics { contentDescription = "Exposure compensation ${formatEv(ev)}. Drag sideways to change." }
+                .graphicsLayer { alpha = if (enabled) 1f else 0.35f },
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                formatEv(ev) + " EV",
+                color = if (enabled && kotlin.math.abs(ev) > 0.05f) HudAmber else Color.White,
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold
+            )
+            Canvas(Modifier.padding(top = 3.dp).fillMaxWidth().height(12.dp)) {
+                val spacing = 14.dp.toPx() / 1.6f
+                val cx = size.width / 2f
+                val current = EvOptions.indices.minByOrNull { kotlin.math.abs(EvOptions[it] - ev) } ?: 9
+                for (i in EvOptions.indices) {
+                    val x = cx + (i - current) * spacing
+                    if (x < 0f || x > size.width) continue
+                    val whole = (i - 9) % 3 == 0
+                    val fade = 1f - kotlin.math.abs(x - cx) / (size.width / 2f)
+                    val h = if (whole) size.height else size.height * 0.55f
+                    drawLine(
+                        Color.White.copy(alpha = 0.25f + 0.5f * fade), Offset(x, size.height - h), Offset(x, size.height),
+                        strokeWidth = (if (whole) 1.5f else 1f).dp.toPx()
+                    )
+                }
+                drawLine(HudAmber, Offset(cx, 0f), Offset(cx, size.height), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
+            }
+        }
     }
 }
 

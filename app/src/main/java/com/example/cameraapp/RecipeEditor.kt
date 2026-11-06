@@ -363,7 +363,7 @@ private fun editorTabs(
         ),
         EditorTab(
             "CAMERA",
-            main = listOf(evWhenPicked, lens, param("defaultFormat"), param("whiteBalance")),
+            main = listOf(evWhenPicked, lens, param("whiteBalance")),
             more = listOf(
                 note("Fixed white balance behaves like film balanced for that light: daylight film turns orange under bulbs."),
                 sub("OUTPUT"), param("keepOriginal"), param("jpegQuality"),
