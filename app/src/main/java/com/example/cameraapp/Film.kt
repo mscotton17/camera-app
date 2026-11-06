@@ -302,16 +302,16 @@ val FilmRecipes: List<FilmRecipe> = listOf(
     // yellow-ish filter mix, fine organic grain; 3:2 frame.
     FilmRecipe(
         id = "pushed_hp5", label = "PUSHED HP5",
-        mono = Triple(0.42f, 0.50f, 0.08f),
-        contrast = 0.08f, blackPoint = 0.005f, shadows = -0.035f, mids = 0.010f, highlights = 0f, whitePoint = 1f,
-        toe = 0.10f, shoulder = 0.30f, dynamicRange = DynamicRange.DR100,
+        mono = Triple(0.38f, 0.47f, 0.15f),
+        contrast = 0.10f, blackPoint = 0.005f, shadows = -0.035f, mids = -0.020f, highlights = -0.040f, whitePoint = 0.970f,
+        toe = 0.10f, shoulder = 0.45f, dynamicRange = DynamicRange.DR100,
         sharpen = 0.15f,
         clarity = 0.12f, clarityRadius = 0.9f,
         vignette = 0.12f, vignetteFeather = 0.80f, vignetteRoundness = 1.0f,
         grain = 0.025f, grainSize = 1.0f, grainColor = 0f, grainRoughness = 0.35f,
         grainShadows = 1.2f, grainMids = 1.0f, grainHighlights = 0.1f,
         aspect = AspectRatio.THREE_TWO,
-        whiteBalance = WhiteBalance.AUTO, defaultEvOn = true, defaultEv = 1f / 3f,
+        whiteBalance = WhiteBalance.AUTO, defaultEvOn = true, defaultEv = 0f,
     ),
     // Reggie's Portra: warm golden-peach midtones, gentle highlight roll-off, soft shadows and
     // subtle warm dye grain on a muted documentary base.
