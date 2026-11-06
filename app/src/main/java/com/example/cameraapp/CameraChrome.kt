@@ -183,7 +183,7 @@ fun TopIconBar(
 /**
  * Exposure compensation as a small ruler: drag along it to scroll in 1/3-stop clicks, double-tap
  * to go back to ±0. Upright it reads left to right (drag left for brighter). Held sideways the
- * ruler stays put, so it runs up and down as you hold the phone (drag up for brighter), and
+ * ruler stays put, so it runs up and down as you hold the phone (drag down for brighter), and
  * only its number turns to read upright. Greyed out in full manual, where EV isn't used.
  */
 @Composable
@@ -201,9 +201,9 @@ private fun EvDial(ev: Float, enabled: Boolean, onEv: (Float) -> Unit, onStep: (
     }
     val orientation = LocalDeviceOrientation.current
     val sideways = orientation == 90 || orientation == 270
-    // Sideways, "up" for the person holding the phone is the screen's left (phone turned
-    // clockwise) or right (anticlockwise); flip the ruler so up is always brighter.
-    val dir = if (orientation == 270) -1 else 1
+    // Sideways, flip the ruler for the phone turned one way (90) so plus is always the same
+    // direction for the person holding it, whichever way it's turned.
+    val dir = if (orientation == 90) -1 else 1
     val dial: @Composable (@Composable () -> Unit) -> Unit = { c -> if (sideways) c() else RotateWithDevice { c() } }
     dial {
         Column(
